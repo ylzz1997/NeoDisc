@@ -41,6 +41,7 @@ async function desktop(page: Page, entries: HistoryEntry[], unavailable: string[
       case 'list_drives': return [];
       case 'default_output': return 'C:/Music/NeoDisc';
       case 'player_action':
+      case 'set_equalizer':
       case 'select_audio_output':
       case 'plugin:event|unlisten': return null;
       case 'plugin:event|listen': return 1;

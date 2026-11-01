@@ -1,6 +1,7 @@
 use crate::{
     audio::{CpalBackend, OutputRouter},
     device,
+    equalizer::{EqualizerControl, EqualizerSettings, EqualizerSource},
     models::*,
 };
 use rodio::{OutputStream, Sink, Source};
@@ -27,6 +28,7 @@ type Reply = SyncSender<Result<(), String>>;
 pub struct Player {
     sender: Sender<(Command, Reply)>,
     status: Arc<Mutex<PlaybackStatus>>,
+    equalizer: EqualizerControl,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -36,8 +38,14 @@ impl Default for Player {
             ..Default::default()
         }));
         let shared = status.clone();
-        thread::spawn(move || worker(receiver, shared));
-        Self { sender, status }
+        let equalizer = EqualizerControl::default();
+        let control = equalizer.clone();
+        thread::spawn(move || worker(receiver, shared, control));
+        Self {
+            sender,
+            status,
+            equalizer,
+        }
     }
 }
 impl Player {
@@ -68,6 +76,9 @@ impl Player {
     }
     pub fn status(&self) -> PlaybackStatus {
         self.status.lock().unwrap().clone()
+    }
+    pub fn set_equalizer(&self, settings: EqualizerSettings) -> Result<(), String> {
+        self.equalizer.set(settings)
     }
     pub fn select_output(&self, name: Option<String>) -> Result<AudioOutputStatus, String> {
         self.send(Command::SelectOutput(name))?;
@@ -148,6 +159,7 @@ fn begin(
     position: f64,
     status: Arc<Mutex<PlaybackStatus>>,
     paused: bool,
+    equalizer: EqualizerControl,
 ) -> Result<Session, String> {
     let disc = device::validated_disc(&disc)?;
     let track = disc
@@ -214,7 +226,7 @@ fn begin(
         state.error = None;
         state.ended = false;
     }
-    sink.append(source);
+    sink.append(EqualizerSource::new(source, equalizer));
     if !paused {
         sink.play();
     }
@@ -240,6 +252,7 @@ struct Runtime {
     transport: Option<Transport>,
     output: OutputRouter<CpalBackend>,
     status: Arc<Mutex<PlaybackStatus>>,
+    equalizer: EqualizerControl,
 }
 impl Runtime {
     fn update_position(&mut self) {
@@ -271,6 +284,7 @@ impl Runtime {
                 t.position,
                 self.status.clone(),
                 t.paused,
+                self.equalizer.clone(),
             )?);
         }
         Ok(())
@@ -379,12 +393,17 @@ impl Runtime {
         Ok(())
     }
 }
-fn worker(receiver: Receiver<(Command, Reply)>, status: Arc<Mutex<PlaybackStatus>>) {
+fn worker(
+    receiver: Receiver<(Command, Reply)>,
+    status: Arc<Mutex<PlaybackStatus>>,
+    equalizer: EqualizerControl,
+) {
     let mut runtime = Runtime {
         session: None,
         transport: None,
         output: OutputRouter::new(CpalBackend),
         status,
+        equalizer,
     };
     let _ = runtime.synchronize_output(false);
     let mut last_scan = Instant::now();

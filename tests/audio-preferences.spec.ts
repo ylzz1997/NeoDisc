@@ -38,7 +38,7 @@ async function mockDesktop(page: Page, savedDevice: string | null = null) {
           switch (command) {
             case 'list_drives': return [];
             case 'default_output': return 'C:/Music/Lucent';
-            case 'player_action': return null;
+            case 'player_action': case 'set_equalizer': return null;
             case 'select_audio_output':
               selected = args.deviceName as string | null;
               route();

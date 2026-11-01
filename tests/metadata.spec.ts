@@ -39,7 +39,7 @@ async function desktop(page: Page) {
             });
             case 'default_output': return 'C:/Music/NeoDisc';
             case 'select_audio_output': return output;
-            case 'player_action': return null;
+            case 'player_action': case 'set_equalizer': return null;
             case 'playback_status': return { track: null, playing: false, position: 0, duration: 0, volume: .5, error: null, ended: false, output };
             case 'start_rip': fixture.rip = args.request!; return 'C:/Music/NeoDisc/Test';
             case 'plugin:event|listen': return 1;

@@ -83,5 +83,7 @@
   "AIFF 音频偏移无效":"Invalid AIFF audio offset",
   "缺少 AIFF 格式块":"The AIFF format chunk is missing",
   "缺少 AIFF 音频块":"The AIFF audio chunk is missing",
-  "AIFF 音轨长度不是完整 CD 扇区":"The AIFF track does not contain a whole number of CD sectors"
+  "AIFF 音轨长度不是完整 CD 扇区":"The AIFF track does not contain a whole number of CD sectors",
+  "EQ 前级增益必须在 -24 到 +12 dB 之间":"EQ preamp gain must be between -24 and +12 dB",
+  "EQ 频段增益必须在 -12 到 +12 dB 之间":"EQ band gain must be between -12 and +12 dB"
 }

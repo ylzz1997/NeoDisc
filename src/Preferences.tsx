@@ -1,6 +1,7 @@
 import { tr, localizeMessage } from './i18n';
 import { Headphones, Volume2, RefreshCw, Cable, CheckCircle2, AlertCircle, Palette, ChevronRight, Monitor, LoaderCircle } from 'lucide-react';
-import type { AudioOutput, Language, Settings } from './types';
+import type { AudioOutput, EqualizerSettings, Language, Settings } from './types';
+import Equalizer from './EqualizerPanel';
 import './preferences.css';
 
 interface Props {
@@ -13,9 +14,13 @@ interface Props {
   onVolume: (value: number) => void;
   onAppearance: () => void;
   onLanguage: (language:Language) => void;
+  equalizerPending: boolean;
+  equalizerError: string | null;
+  onEqualizer: (settings: EqualizerSettings) => void;
+  onRetryEqualizer: () => void;
 }
 
-export default function Preferences({ native, settings, output, changing, onSelect, onRefresh, onVolume, onAppearance, onLanguage }: Props) {
+export default function Preferences({ native, settings, output, changing, onSelect, onRefresh, onVolume, onAppearance, onLanguage, equalizerPending, equalizerError, onEqualizer, onRetryEqualizer }: Props) {
   const devices = output?.devices || [];
   const selectedMissing = settings.outputDevice && !devices.some(d => d.name === settings.outputDevice);
   const ready = !!output?.activeDevice && !output.error;
@@ -41,6 +46,7 @@ export default function Preferences({ native, settings, output, changing, onSele
       {output?.error&&<div className="audio-error" role="alert"><AlertCircle size={18}/><span>{localizeMessage(output.error)}</span></div>}
       <div className="audio-actions"><button className="secondary" disabled={!native||changing} onClick={()=>onRefresh(false)}><RefreshCw size={16}/>{tr("刷新设备列表")}</button><button className="primary" disabled={!native||changing} onClick={()=>onRefresh(true)}>{changing?<LoaderCircle size={16} className="spin"/>:<Cable size={17}/>}{tr("重新连接输出")}</button><span>{devices.length?tr("发现 {v0} 个输出设备",{v0:devices.length}):''}</span></div>
     </section>
+    <Equalizer native={native} settings={settings.equalizer} pending={equalizerPending} error={equalizerError} onChange={onEqualizer} onRetry={onRetryEqualizer}/>
     <section className="preferences-volume"><div><Volume2 size={20}/><span><strong>{tr("播放音量")}</strong><small>{tr("只调整 NeoDisc，不改变系统音量。")}</small></span></div><input aria-label={tr("首选项播放音量")} type="range" min="0" max="1" step="0.01" value={settings.volume} onChange={e=>onVolume(+e.target.value)} style={{'--range-fill':`${settings.volume*100}%`} as React.CSSProperties}/><b>{Math.round(settings.volume*100)}%</b></section>
     <div className="audio-info-note"><CheckCircle2 size={15}/><p>{tr("音频使用系统共享输出，实际格式由设备决定。FLAC / WAV 保留 CD 原始音频；MP3 / AAC 使用单独的编码设置。")}<br/>{tr("设备选择自动保存在本机；切换设备时可能有短暂的声音间隔。")}</p></div>
     <button className="appearance-shortcut" onClick={onAppearance}><Palette size={21}/><span><strong>{tr("外观与皮肤")}</strong><small>{tr("配色、深浅模式与自动夜间")}</small></span><ChevronRight size={19}/></button>

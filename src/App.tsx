@@ -8,6 +8,7 @@ import { Disc3, Download, History, Palette, Search, ChevronRight, ChevronLeft, R
 import type { AlbumMetadata, AudioOutput, Disc, Drive, HistoryEntry, Playback, Progress, Settings, Skin, ThemeMode } from './types';
 import { duration, readSettings, resolveTheme } from './theme';
 import Preferences from './Preferences';
+import { useEqualizer } from './useEqualizer';
 import HistoryPage from './HistoryPage';
 import EncodingSettings, { EncodingDialog } from './EncodingSettings';
 import { isLossy } from './encoding';
@@ -40,6 +41,7 @@ export default function App() {
   const locale=useLocale();
   const skins=getSkins();
   const [settings,setSettings]=useState<Settings>(readSettings);
+  const equalizer = useEqualizer(settings.equalizer, native);
   useEffect(()=>setLanguage(settings.language),[settings.language]);
   useEffect(()=>{document.documentElement.lang=locale;},[locale]);
   const [page,setPage]=useState<'disc'|'history'|'appearance'|'preferences'>('disc');
@@ -139,12 +141,12 @@ export default function App() {
   },[]);
   async function play(number?:number,position=0){
     if(!native){toast(tr("预览中不模拟播放；桌面版会读取真实 CD 音频。"));return;}
-    if(!disc||ripping||busy||audioBusy||!audioReady)return;setBusy('play');lastError.current='';
+    if(!disc||ripping||busy||audioBusy||!audioReady||!equalizer.ready)return;setBusy('play');lastError.current='';
     try{await invoke('play_track',{disc,track:number??disc.tracks[0].number,position});setPlayback(await invoke<Playback>('playback_status'));}catch(e){toast(String(e),true);}finally{setBusy('');}
   }
   async function togglePlayback(){
     if(!native){toast(tr("请在桌面版中播放实体 CD。"));return;}
-    if(!disc||ripping||busy||audioBusy||!audioReady)return;
+    if(!disc||ripping||busy||audioBusy||!audioReady||!equalizer.ready)return;
     if(playback.track===null||playback.ended){await play(playback.track??undefined);return;}
     await guarded(async()=>{await invoke('player_action',{action:playback.playing?'pause':'resume'});setPlayback(await invoke<Playback>('playback_status'));});
   }
@@ -168,7 +170,7 @@ export default function App() {
   const selectedBytes=selectedTracks.reduce((sum,t)=>sum+t.sectors*2352,0);
   const visibleTracks=disc?.tracks.filter(t=>`${t.title} ${t.number}`.toLowerCase().includes(search.toLowerCase()))||[];
   const allSelected=!!disc&&selected.length===disc.tracks.length;
-  const playbackDisabled=!disc||ripping||!!busy||audioBusy||!audioReady;
+  const playbackDisabled=!disc||ripping||!!busy||audioBusy||!audioReady||!equalizer.ready;
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -200,7 +202,7 @@ export default function App() {
 
       <main className="content">
         {!native&&<div className="preview-banner"><Monitor size={15}/>{tr("界面预览 · 示例曲目仅用于展示，播放和抓轨需要桌面版。")}</div>}
-        {page==='preferences'&&<Preferences native={native} onLanguage={language=>patch({language})} settings={settings} output={audioOutput} changing={audioBusy||!audioReady} onSelect={name=>void selectOutput(name)} onRefresh={reconnect=>void refreshOutput(reconnect)} onVolume={changeVolume} onAppearance={()=>setPage('appearance')}/>}
+        {page==='preferences'&&<Preferences native={native} onLanguage={language=>patch({language})} settings={settings} output={audioOutput} changing={audioBusy||!audioReady} onSelect={name=>void selectOutput(name)} onRefresh={reconnect=>void refreshOutput(reconnect)} onVolume={changeVolume} onAppearance={()=>setPage('appearance')} equalizerPending={equalizer.pending} equalizerError={equalizer.error} onEqualizer={value=>patch({equalizer:value})} onRetryEqualizer={equalizer.retry}/>}
         {page==='disc'&&<>
           <div className="page-heading"><div><div className="eyebrow">YOUR DISC. YOUR COLLECTION.</div><h1>{tr("让音乐，慢下来")}<span className="accent">{tr("。")}</span></h1></div><div className="drive-controls"><select aria-label={tr("选择光驱")} disabled={ripping||!!busy} value={driveId} onChange={e=>{setDriveId(e.target.value);void loadDisc(e.target.value);}}>{drives.length?drives.map(d=><option key={d.id} value={d.id}>{localizeMessage(d.name)}</option>):<option value="">{native?tr("未发现光驱"):tr("演示光盘")}</option>}</select><IconButton label={tr("刷新光盘")} onClick={()=>void refresh()} disabled={ripping||!!busy}><RefreshCw size={17} className={busy==='read'||busy==='scan'?'spin':''}/></IconButton><IconButton label={tr("弹出光盘")} disabled={!native||!driveId||ripping||!!busy} onClick={()=>void guarded(async()=>{await invoke('eject_disc',{driveId});++discLoad.current;setArtwork(null);setDisc(null);setSelected([]);setPlayback(emptyPlayback);setDeviceMessage(tr("光盘已弹出，放入下一张 CD 后刷新。"));})}><Eject size={18}/></IconButton></div></div>
 

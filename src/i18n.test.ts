@@ -4,6 +4,7 @@ import ts from 'typescript';
 import {getLocale,localizeMessage,resolveLocale,setLanguage,tr} from './i18n';
 import english from './locales/en.json';
 import nativeEnglish from './locales/native-en.json';
+import {eqPresets} from './equalizer';
 
 afterEach(()=>setLanguage('system'));
 describe('language selection and translation',()=>{
@@ -35,7 +36,8 @@ describe('language selection and translation',()=>{
   });
   it('has translations for literal UI keys and retains all interpolation parameters',()=>{
     const dictionary:Record<string,string>={...english,...nativeEnglish};
-    for(const file of ['App.tsx','Preferences.tsx','HistoryPage.tsx','EncodingSettings.tsx','encoding.ts']){
+    for(const preset of eqPresets)expect(dictionary[preset.label],preset.id).toBeTruthy();
+    for(const file of ['App.tsx','Preferences.tsx','HistoryPage.tsx','EncodingSettings.tsx','encoding.ts','EqualizerPanel.tsx','EqualizerCurve.tsx','equalizer.ts']){
       const source=ts.createSourceFile(file,readFileSync(new URL(`./${file}`,import.meta.url),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
       function visit(node:ts.Node){
         if(ts.isCallExpression(node)&&node.expression.getText(source)==='tr'&&ts.isStringLiteral(node.arguments[0]))expect(dictionary[node.arguments[0].text],`${file}: ${node.arguments[0].text}`).toBeTruthy();

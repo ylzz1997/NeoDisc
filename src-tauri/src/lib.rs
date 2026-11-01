@@ -2,6 +2,7 @@ pub mod aiff;
 pub mod audio;
 pub mod device;
 pub mod encode;
+pub mod equalizer;
 mod history;
 pub mod lossy;
 pub mod metadata;
@@ -105,6 +106,16 @@ async fn player_action(
 #[tauri::command]
 fn playback_status(state: State<'_, Shared>) -> PlaybackStatus {
     state.player.status()
+}
+#[tauri::command]
+async fn set_equalizer(
+    settings: equalizer::EqualizerSettings,
+    state: State<'_, Shared>,
+) -> Result<(), String> {
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || engine.player.set_equalizer(settings))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn select_audio_output(
@@ -238,6 +249,7 @@ pub fn run() {
             identify_disc,
             play_track,
             player_action,
+            set_equalizer,
             playback_status,
             select_audio_output,
             refresh_audio_outputs,

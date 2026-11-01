@@ -15,6 +15,7 @@ Current version: **0.1.0**.
 - English and Simplified Chinese, following the system language by default. A manual language choice takes effect immediately and is saved locally.
 - CD playback, pause, previous/next track, seeking, volume and repeat. Press Space to play or pause.
 - Selectable audio output, automatic switching with the system default, device refresh and reconnection.
+- Live 10-band playback EQ with a draggable frequency/gain curve in dB, preamp gain and seven presets (Flat, Bass boost, Vocal, Pop, Rock, Classical and Jazz). Supports custom adjustments, bypass and reset. Settings are saved locally; EQ does not affect ripped files.
 - Automatic album, track and artwork identification through MusicBrainz and Cover Art Archive. Missing or ambiguous results quietly keep the original display. Album information can also be edited locally.
 - FLAC and WAV extraction preserving the original 44.1 kHz, 16-bit stereo audio.
 - MP3 and AAC-LC/M4A extraction with sample rate, bitrate and channel settings. MP3 also supports CBR, ABR, VBR and encoding precision. Each format remembers its settings and offers quality presets.
@@ -30,7 +31,7 @@ Current version: **0.1.0**.
 3. Album information is identified automatically in the background. Use **Edit info** to change album and track text.
 4. Select tracks, choose FLAC, WAV, MP3 or AAC and an output folder. For MP3 or AAC, open **Encoding settings** to adjust the parameters, then click **Start ripping**.
 5. Open **Rip history** to find completed exports. Missing folders are marked and can be cleaned up together; deletion can be undone.
-6. Use **Appearance** for skins and night mode, and **Preferences** for language and audio output. If playback becomes silent after changing devices, try **Reconnect output**.
+6. Use **Appearance** for skins and night mode, and **Preferences** for language, audio output and EQ. Choose an EQ preset to enable it, then drag curve points or use arrow keys to adjust each band. Double-click a point to reset it to 0 dB. If playback becomes silent after changing devices, try **Reconnect output**.
 
 Ripping uses the CD drive and pauses playback. The default output folder is `NeoDisc` inside your system Music folder. MP3 and AAC are lossy formats; increasing the sample rate does not add detail to the original CD audio.
 
@@ -73,6 +74,6 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 
 Browser tests use Edge on Windows and Playwright Chromium elsewhere. Install Chromium with `npx playwright install chromium` before running those tests on macOS or Linux.
 
-Automated checks cover themes, language selection and persistence, audio routing, metadata, history cleanup, encoding settings, tags, artwork, decoding and cancellation. Windows playback and ripping have also been tested with a physical USB CD drive. macOS optical-drive behavior still needs testing on physical hardware.
+Automated checks cover themes, language selection and persistence, audio routing, EQ frequency response and live changes, preset persistence, metadata, history cleanup, encoding settings, tags, artwork, decoding and cancellation. Windows playback and ripping have also been tested with a physical USB CD drive. macOS optical-drive behavior still needs testing on physical hardware.
 
 Repeated-read comparison may use drive or system caches; it is not AccurateRip verification.

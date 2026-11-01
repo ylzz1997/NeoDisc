@@ -11,7 +11,7 @@ async function desktop(page:Page){
         case 'read_disc':return disc;
         case 'identify_disc':return null;
         case 'default_output':return 'C:/Music/NeoDisc';
-        case 'player_action':case 'select_audio_output':case 'plugin:event|unlisten':return null;
+        case 'player_action':case 'set_equalizer':case 'select_audio_output':case 'plugin:event|unlisten':return null;
         case 'plugin:event|listen':return 1;
         case 'playback_status':return {track:null,playing:false,position:0,duration:0,volume:.5,error:null,ended:false};
         case 'start_rip':return 'C:/Music/NeoDisc/Test';

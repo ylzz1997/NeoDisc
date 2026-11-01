@@ -12,5 +12,6 @@ export type Skin = 'graphite' | 'forest' | 'amber';
 export type OutputFormat = 'flac' | 'wav' | 'mp3' | 'aac';
 export type LossyFormat = 'mp3' | 'aac';
 export type Language = 'system' | 'zh-CN' | 'en';
+export interface EqualizerSettings { enabled: boolean; preampDb: number; bands: number[] }
 export interface EncodingOptions { sampleRate: number; bitrateKbps: number; bitrateMode: 'cbr' | 'abr' | 'vbr'; vbrQuality: number; channelMode: 'jointStereo' | 'stereo' | 'mono'; encoderQuality: number }
-export interface Settings { language: Language; skin: Skin; mode: ThemeMode; nightStart: string; nightEnd: string; format: OutputFormat; verify: boolean; outputDir: string; volume: number; outputDevice: string | null; mp3: EncodingOptions; aac: EncodingOptions }
+export interface Settings { language: Language; skin: Skin; mode: ThemeMode; nightStart: string; nightEnd: string; format: OutputFormat; verify: boolean; outputDir: string; volume: number; outputDevice: string | null; equalizer: EqualizerSettings; mp3: EncodingOptions; aac: EncodingOptions }

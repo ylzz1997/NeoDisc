@@ -1,5 +1,5 @@
 //! Opt-in, muted hardware check. Never changes the system's default output.
-use lucent_core::{device, playback::Player};
+use lucent_core::{device, equalizer::EqualizerSettings, playback::Player};
 use std::{thread, time::Duration};
 
 fn settle() {
@@ -17,12 +17,37 @@ fn main() -> Result<(), String> {
     let disc = device::read_disc(&drive)?;
     let track = disc.tracks.first().ok_or("No tracks")?.number;
     player.play(disc, track, 3.0)?;
-    settle();
+    // Cold USB/Bluetooth endpoints can start asynchronously. Wait for samples,
+    // not an assumed fixed device startup latency.
+    for _ in 0..20 {
+        settle();
+        let state = player.status();
+        if state.position > 3.05 || state.error.is_some() || state.output.error.is_some() {
+            break;
+        }
+    }
     let before = player.status();
     if !before.playing || before.position <= 3.05 {
         return Err(format!("Initial playback did not advance: {before:?}"));
     }
     let generation = before.output.generation;
+    let mut eq = EqualizerSettings {
+        enabled: true,
+        preamp_db: -6.0,
+        bands: [4.0, 3.0, 1.0, -1.0, -2.0, 1.0, 3.0, 4.0, 3.0, 2.0],
+    };
+    player.set_equalizer(eq)?;
+    settle();
+    let adjusted = player.status();
+    if !adjusted.playing
+        || adjusted.track != before.track
+        || adjusted.position <= before.position
+        || adjusted.output.generation != generation
+        || adjusted.volume != 0.0
+    {
+        return Err(format!("Live EQ disturbed playback: {adjusted:?}"));
+    }
+    println!("PASS: live EQ keeps the output stream, position and muted playback");
     player.refresh_output(true)?;
     settle();
     let reconnected = player.status();
@@ -39,6 +64,15 @@ fn main() -> Result<(), String> {
     player.pause()?;
     settle();
     let position = player.status().position;
+    eq.enabled = false;
+    player.set_equalizer(eq)?;
+    settle();
+    if player.status().playing || (player.status().position - position).abs() > 0.001 {
+        return Err("EQ bypass disturbed paused playback".into());
+    }
+    eq.enabled = true;
+    player.set_equalizer(eq)?;
+    println!("PASS: EQ bypass preserves pause and position");
     for device in output.devices.iter().filter(|d| d.selectable) {
         player.select_output(Some(device.name.clone()))?;
         settle();
