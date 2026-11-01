@@ -7,9 +7,23 @@
 .eq-heading .toggle i { width: 14px; height: 14px; }
 .eq-heading .toggle.on i { transform: translateX(14px); }
 .eq-preset-heading { display: flex; align-items: center; gap: 10px; font-size: 10px; color: var(--muted); margin-bottom: 11px; }
-.eq-current { color: var(--accent); background: var(--accent-soft); padding: 3px 6px; border-radius: 4px; }
+.eq-current { color: var(--accent); background: var(--accent-soft); padding: 3px 6px; border-radius: 4px; max-width: 220px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eq-reset { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; font-size: 10px; padding: 3px 0; color: var(--muted); }
 .eq-reset:hover { color: var(--text); }
+.eq-preset-heading > span:first-child { flex-shrink: 0; }
+.eq-preset-actions { display: flex; align-items: center; gap: 16px; margin-left: auto; flex-shrink: 0; }
+.eq-preset-actions .eq-reset { margin-left: 0; }
+.eq-save { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 10px; padding: 3px 0; }
+.eq-saved-presets { display: grid; grid-template-columns: auto minmax(0, 1fr) 30px 30px; align-items: center; gap: 8px; margin: 0 0 20px; }
+.eq-saved-presets label { color: var(--muted); font-size: 11px; margin-right: 5px; }
+.eq-saved-presets select { min-width: 0; width: 100%; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 9px 11px; font: inherit; font-size: 11px; text-overflow: ellipsis; }
+.eq-preset-notice { display: flex; align-items: center; gap: 10px; border-radius: 6px; padding: 10px 12px; background: var(--accent-soft); color: var(--muted); font-size: 10px; line-height: 1.6; margin-bottom: 16px; }
+.eq-preset-notice span { overflow-wrap: anywhere; }
+.eq-preset-notice button { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 10px; white-space: nowrap; margin-left: auto; }
+.modal.eq-preset-modal { width: 460px; }
+.eq-preset-modal > label { display: block; font-size: 12px; margin: 22px 0 10px; color: var(--muted); }
+.eq-preset-modal > input { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+.eq-preset-modal > .eq-save-message { color: var(--accent); font-size: 11px; line-height: 1.7; margin-top: 12px; }
 .eq-presets { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 16px; }
 .eq-presets button { padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 11px; background: var(--bg); }
 .eq-presets button:hover { color: var(--text); border-color: var(--faint); }

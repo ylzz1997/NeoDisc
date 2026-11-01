@@ -37,7 +37,7 @@ describe('language selection and translation',()=>{
   it('has translations for literal UI keys and retains all interpolation parameters',()=>{
     const dictionary:Record<string,string>={...english,...nativeEnglish};
     for(const preset of eqPresets)expect(dictionary[preset.label],preset.id).toBeTruthy();
-    for(const file of ['App.tsx','Preferences.tsx','HistoryPage.tsx','EncodingSettings.tsx','encoding.ts','EqualizerPanel.tsx','EqualizerCurve.tsx','equalizer.ts']){
+    for(const file of ['App.tsx','Preferences.tsx','HistoryPage.tsx','EncodingSettings.tsx','encoding.ts','EqualizerPanel.tsx','EqualizerCurve.tsx','EqualizerPresetDialog.tsx','equalizer.ts']){
       const source=ts.createSourceFile(file,readFileSync(new URL(`./${file}`,import.meta.url),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
       function visit(node:ts.Node){
         if(ts.isCallExpression(node)&&node.expression.getText(source)==='tr'&&ts.isStringLiteral(node.arguments[0]))expect(dictionary[node.arguments[0].text],`${file}: ${node.arguments[0].text}`).toBeTruthy();

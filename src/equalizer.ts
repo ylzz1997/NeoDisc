@@ -1,4 +1,4 @@
-import type { EqualizerSettings } from './types';
+import type { EqualizerSettings, SavedEqualizer } from './types';
 
 export const eqFrequencies = [31.25, 62.5, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 export const defaultEqualizer: EqualizerSettings = { enabled: false, preampDb: 0, bands: Array<number>(10).fill(0) };
@@ -23,7 +23,26 @@ export function normalizeEqualizer(value: unknown): EqualizerSettings {
 }
 
 export function matchingPreset(settings: EqualizerSettings) {
-  return eqPresets.find(preset => preset.preampDb === settings.preampDb && preset.bands.every((gain, i) => gain === settings.bands[i]));
+  return eqPresets.find(preset => matchesEqualizer(preset, settings));
+}
+
+export function matchesEqualizer(preset: Pick<EqualizerSettings, 'preampDb' | 'bands'>, settings: EqualizerSettings) {
+  return preset.preampDb === settings.preampDb && preset.bands.length === 10 && preset.bands.every((gain, i) => gain === settings.bands[i]);
+}
+
+export function normalizeSavedEqualizers(value: unknown): SavedEqualizer[] {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set<string>(), names = new Set<string>();
+  return value.flatMap((entry: unknown, index) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const saved = entry as Partial<SavedEqualizer>;
+    const name = typeof saved.name === 'string' ? saved.name.trim().slice(0, 40) : '';
+    const id = typeof saved.id === 'string' && saved.id.length > 0 && saved.id.length <= 100 ? saved.id : `saved-eq-${index}`;
+    if (!name || !Array.isArray(saved.bands) || ids.has(id) || names.has(name.toLowerCase())) return [];
+    ids.add(id); names.add(name.toLowerCase());
+    const { bands, preampDb } = normalizeEqualizer(saved);
+    return [{ id, name, bands, preampDb }];
+  });
 }
 
 export function gainLabel(gain: number) { return `${gain > 0 ? '+' : ''}${gain} dB`; }
