@@ -1,0 +1,104 @@
+name: Desktop checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      package:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  interface:
+    name: Interface and translations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check:version
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: interface-test-results
+          path: test-results/
+          retention-days: 7
+
+  desktop:
+    name: ${{ matrix.target }}
+    timeout-minutes: 60
+    env:
+      NEODISC_ENCODER_TARGET: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundle: nsis
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundle: dmg
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundle: dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/encoders
+            artifacts/encoder-download/tools
+          key: encoder-${{ matrix.target }}-${{ hashFiles('scripts/prepare-encoder.mjs', 'scripts/build-encoder-macos.sh') }}
+      - run: npm ci
+      - run: npm run check:version
+      - run: npm run prepare:encoder
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+      - name: Compile desktop application
+        if: ${{ !inputs.package }}
+        run: npm run tauri build -- --target ${{ matrix.target }} --no-bundle
+      - name: Build installer
+        if: ${{ inputs.package }}
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+      - name: Keep release installers
+        if: ${{ inputs.package }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg

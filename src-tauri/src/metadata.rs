@@ -1,0 +1,466 @@
+//! Optional automatic lookup. Exact Disc IDs only; failures never block the CD engine.
+use crate::models::{AlbumMetadata, Disc, DiscToc, MetadataTrack};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha1::{Digest, Sha1};
+use std::{
+    collections::HashMap,
+    fs,
+    io::{Cursor, Read},
+    path::{Path, PathBuf},
+    sync::Mutex,
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+const MAX_JSON: u64 = 2 * 1024 * 1024;
+const MAX_COVER: u64 = 2 * 1024 * 1024;
+const DAY: u64 = 86400;
+
+impl DiscToc {
+    pub fn disc_id(&self) -> Option<String> {
+        if self.first_track == 0
+            || self.last_track > 99
+            || self.last_track < self.first_track
+            || self.offsets.len() != usize::from(self.last_track - self.first_track + 1)
+            || self.offsets.first().is_none_or(|n| *n < 150)
+            || self.offsets.windows(2).any(|p| p[0] >= p[1])
+            || self.offsets.last().is_none_or(|n| *n >= self.lead_out)
+            || self.lead_out > 100 * 60 * 75
+        {
+            return None;
+        }
+        let mut input = format!(
+            "{:02X}{:02X}{:08X}",
+            self.first_track, self.last_track, self.lead_out
+        );
+        for number in 1..=99 {
+            let offset = if (self.first_track..=self.last_track).contains(&number) {
+                self.offsets[usize::from(number - self.first_track)]
+            } else {
+                0
+            };
+            input.push_str(&format!("{offset:08X}"));
+        }
+        Some(
+            STANDARD
+                .encode(Sha1::digest(input.as_bytes()))
+                .replace('+', ".")
+                .replace('/', "_")
+                .replace('=', "-"),
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Cached {
+    checked_at: u64,
+    value: Option<AlbumMetadata>,
+}
+#[derive(Default)]
+struct State {
+    last_request: Option<Instant>,
+    recent: HashMap<String, (Instant, Option<AlbumMetadata>)>,
+}
+pub struct MetadataService {
+    cache: PathBuf,
+    state: Mutex<State>,
+}
+fn cache_root() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("NeoDisc")
+        .join("metadata-v1")
+}
+impl Default for MetadataService {
+    fn default() -> Self {
+        Self {
+            cache: cache_root(),
+            state: Mutex::new(State::default()),
+        }
+    }
+}
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+fn read_cache(root: &Path, id: &str) -> Option<Cached> {
+    let file = fs::File::open(root.join(format!("{id}.json"))).ok()?;
+    if file.metadata().ok()?.len() > MAX_COVER * 2 {
+        return None;
+    }
+    let cached: Cached = serde_json::from_reader(file).ok()?;
+    if cached.value.as_ref().is_some_and(|v| v.disc_id != id) {
+        return None;
+    }
+    Some(cached)
+}
+impl MetadataService {
+    pub fn lookup(&self, disc: &Disc) -> Result<Option<AlbumMetadata>, String> {
+        let Some(toc) = &disc.lookup_toc else {
+            return Ok(None);
+        };
+        let Some(id) = toc.disc_id() else {
+            return Ok(None);
+        };
+        if disc.tracks.len() != toc.offsets.len()
+            || disc
+                .tracks
+                .iter()
+                .enumerate()
+                .any(|(i, t)| usize::from(t.number) != usize::from(toc.first_track) + i)
+        {
+            return Ok(None);
+        }
+        // A separate lock from playback/ripping also coalesces overlapping refreshes.
+        let mut state = self.state.lock().map_err(|e| e.to_string())?;
+        if let Some((time, value)) = state.recent.get(&id) {
+            if time.elapsed() < Duration::from_secs(300) {
+                return Ok(value.clone());
+            }
+        }
+        let cached = read_cache(&self.cache, &id);
+        if let Some(cached) = &cached {
+            let ttl = if cached.value.is_some() {
+                30 * DAY
+            } else {
+                DAY
+            };
+            if now().saturating_sub(cached.checked_at) < ttl {
+                return Ok(cached.value.clone());
+            }
+        }
+        if let Some(last) = state.last_request {
+            if let Some(delay) = Duration::from_millis(1100).checked_sub(last.elapsed()) {
+                thread::sleep(delay);
+            }
+        }
+        state.last_request = Some(Instant::now());
+        let result = fetch_metadata(&id, toc);
+        let fallback = cached.and_then(|c| c.value);
+        // A transient failure may reuse old positive metadata, never writes a negative disk cache.
+        let remembered = result
+            .as_ref()
+            .ok()
+            .cloned()
+            .unwrap_or_else(|| fallback.clone());
+        if state.recent.len() >= 128 {
+            state.recent.clear();
+        }
+        state
+            .recent
+            .insert(id.clone(), (Instant::now(), remembered));
+        match result {
+            Ok(value) => {
+                let record = Cached {
+                    checked_at: now(),
+                    value: value.clone(),
+                };
+                if let Ok(bytes) = serde_json::to_vec(&record) {
+                    if fs::create_dir_all(&self.cache).is_ok() {
+                        let _ = fs::write(self.cache.join(format!("{id}.json")), bytes);
+                    }
+                }
+                Ok(value)
+            }
+            Err(_) if fallback.is_some() => Ok(fallback),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+fn client() -> Result<Client, String> {
+    Client::builder()
+        .user_agent(concat!(
+            "NeoDisc/",
+            env!("CARGO_PKG_VERSION"),
+            " (desktop audio CD metadata lookup)"
+        ))
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(10))
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| e.to_string())
+}
+fn download(client: &Client, url: &str, limit: u64) -> Result<Option<Vec<u8>>, String> {
+    let response = client.get(url).send().map_err(|e| e.to_string())?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let response = response.error_for_status().map_err(|e| e.to_string())?;
+    if response.content_length().is_some_and(|n| n > limit) {
+        return Err("Metadata response too large".into());
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit {
+        return Err("Metadata response too large".into());
+    }
+    Ok(Some(bytes))
+}
+fn fetch_metadata(id: &str, toc: &DiscToc) -> Result<Option<AlbumMetadata>, String> {
+    let client = client()?;
+    let url = format!("https://musicbrainz.org/ws/2/discid/{id}?fmt=json&inc=recordings+artist-credits&cdstubs=no");
+    let Some(bytes) = download(&client, &url, MAX_JSON)? else {
+        return Ok(None);
+    };
+    let json: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let Some(mut matched) = select_release(&json, id, toc) else {
+        return Ok(None);
+    };
+    // Album text remains useful when the cover archive is unavailable.
+    let url = format!(
+        "https://coverartarchive.org/release/{}/front-500",
+        matched.release_id
+    );
+    matched.cover = download(&client, &url, MAX_COVER)
+        .ok()
+        .flatten()
+        .and_then(CoverImage::parse)
+        .map(|c| c.data_url());
+    Ok(Some(matched))
+}
+fn text(value: &Value) -> Option<String> {
+    let s = value.as_str()?.trim();
+    if s.is_empty() || s.chars().count() > 300 || s.chars().any(char::is_control) {
+        None
+    } else {
+        Some(s.into())
+    }
+}
+fn credit(value: &Value) -> Option<String> {
+    let mut result = String::new();
+    for part in value.as_array()? {
+        let name = text(&part["name"]).or_else(|| text(&part["artist"]["name"]))?;
+        result.push_str(&name);
+        result.push_str(part["joinphrase"].as_str().unwrap_or(""));
+    }
+    text(&Value::String(result))
+}
+fn uuid(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+}
+fn select_release(root: &Value, id: &str, toc: &DiscToc) -> Option<AlbumMetadata> {
+    if root["id"].as_str()? != id {
+        return None;
+    }
+    let mut candidates = vec![];
+    for release in root["releases"].as_array()? {
+        let Some(release_id) = release["id"].as_str().filter(|id| uuid(id)) else {
+            continue;
+        };
+        let (Some(title), Some(artist)) =
+            (text(&release["title"]), credit(&release["artist-credit"]))
+        else {
+            continue;
+        };
+        for medium in release["media"].as_array().into_iter().flatten() {
+            if !medium["discs"]
+                .as_array()
+                .is_some_and(|ds| ds.iter().any(|d| d["id"].as_str() == Some(id)))
+            {
+                continue;
+            }
+            let Some(tracks) = medium["tracks"]
+                .as_array()
+                .filter(|ts| ts.len() == toc.offsets.len())
+            else {
+                continue;
+            };
+            let tracks: Option<Vec<_>> = tracks
+                .iter()
+                .enumerate()
+                .map(|(i, track)| {
+                    if track["position"].as_u64()? != i as u64 + 1 {
+                        return None;
+                    }
+                    Some(MetadataTrack {
+                        number: toc.first_track + i as u8,
+                        title: text(&track["title"])
+                            .or_else(|| text(&track["recording"]["title"]))?,
+                        artist: credit(&track["artist-credit"])
+                            .or_else(|| credit(&track["recording"]["artist-credit"]))
+                            .unwrap_or_else(|| artist.clone()),
+                    })
+                })
+                .collect();
+            if let Some(tracks) = tracks {
+                candidates.push((
+                    release["cover-art-archive"]["front"]
+                        .as_bool()
+                        .unwrap_or(false),
+                    AlbumMetadata {
+                        disc_id: id.into(),
+                        release_id: release_id.into(),
+                        title: title.clone(),
+                        artist: artist.clone(),
+                        tracks,
+                        cover: None,
+                    },
+                ));
+            }
+        }
+    }
+    let first = &candidates.first()?.1;
+    // Equivalent pressings are fine; contradictory album/track text is not an automatic match.
+    if candidates.iter().any(|(_, c)| {
+        c.title != first.title || c.artist != first.artist || c.tracks != first.tracks
+    }) {
+        return None;
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.release_id.cmp(&b.1.release_id)));
+    candidates.into_iter().next().map(|(_, c)| c)
+}
+
+pub struct CoverImage {
+    pub data: Vec<u8>,
+    pub mime: &'static str,
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+}
+impl CoverImage {
+    fn parse(data: Vec<u8>) -> Option<Self> {
+        if data.len() as u64 > MAX_COVER {
+            return None;
+        }
+        let mut reader = image::ImageReader::new(Cursor::new(&data))
+            .with_guessed_format()
+            .ok()?;
+        let mime = match reader.format()? {
+            image::ImageFormat::Jpeg => "image/jpeg",
+            image::ImageFormat::Png => "image/png",
+            _ => return None,
+        };
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(4096);
+        limits.max_image_height = Some(4096);
+        limits.max_alloc = Some(32 * 1024 * 1024);
+        reader.limits(limits);
+        let decoded = reader.decode().ok()?;
+        Some(Self {
+            width: decoded.width(),
+            height: decoded.height(),
+            depth: u32::from(decoded.color().bits_per_pixel()),
+            data,
+            mime,
+        })
+    }
+    fn data_url(&self) -> String {
+        format!("data:{};base64,{}", self.mime, STANDARD.encode(&self.data))
+    }
+    pub fn filename(&self) -> &'static str {
+        if self.mime == "image/png" {
+            "cover.png"
+        } else {
+            "cover.jpg"
+        }
+    }
+    pub fn flac_block(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend(3u32.to_be_bytes()); // Front cover.
+        out.extend((self.mime.len() as u32).to_be_bytes());
+        out.extend(self.mime.as_bytes());
+        for n in [
+            0,
+            self.width,
+            self.height,
+            self.depth,
+            0,
+            self.data.len() as u32,
+        ] {
+            out.extend(n.to_be_bytes());
+        }
+        out.extend(&self.data);
+        out
+    }
+}
+pub fn cached_cover(disc: &Disc) -> Option<CoverImage> {
+    let id = disc.lookup_toc.as_ref()?.disc_id()?;
+    if disc.metadata_id.as_deref() != Some(&id) {
+        return None;
+    }
+    let cached = read_cache(&cache_root(), &id)?.value?;
+    let cover = cached.cover?;
+    let (_, data) = cover.split_once(";base64,")?;
+    CoverImage::parse(STANDARD.decode(data).ok()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    fn toc() -> DiscToc {
+        DiscToc {
+            first_track: 1,
+            last_track: 6,
+            lead_out: 95462,
+            offsets: vec![150, 15363, 32314, 46592, 63414, 80489],
+        }
+    }
+    #[test]
+    fn official_disc_id_vector_and_invalid_tocs() {
+        assert_eq!(
+            toc().disc_id().as_deref(),
+            Some("49HHV7Eb8UKF3aQiNmu1GR8vKTY-")
+        );
+        let mut t = toc();
+        t.offsets[1] = 150;
+        assert!(t.disc_id().is_none());
+        t = toc();
+        t.last_track = 99;
+        assert!(t.disc_id().is_none());
+        t = toc();
+        t.lead_out = 150;
+        assert!(t.disc_id().is_none());
+    }
+    fn response(id: &str) -> Value {
+        json!({"id":id,"releases":[{"id":"01234567-1234-1234-1234-123456789abc","title":"测试专辑","artist-credit":[{"name":"音乐人"}],"media":[{"discs":[{"id":id}],"tracks":(1..=6).map(|n| json!({"position":n,"title":format!("作品 {n}")})).collect::<Vec<_>>()}]}]})
+    }
+    #[test]
+    fn exact_medium_matches_and_conflicting_releases_are_skipped() {
+        let id = toc().disc_id().unwrap();
+        let mut v = response(&id);
+        let matched = select_release(&v, &id, &toc()).unwrap();
+        assert_eq!(matched.tracks.len(), 6);
+        assert_eq!(matched.tracks[0].artist, "音乐人");
+        let mut second = v["releases"][0].clone();
+        second["id"] = json!("11234567-1234-1234-1234-123456789abc");
+        v["releases"].as_array_mut().unwrap().push(second);
+        assert!(select_release(&v, &id, &toc()).is_some());
+        v["releases"][1]["title"] = json!("另一个专辑");
+        assert!(select_release(&v, &id, &toc()).is_none());
+        let mut wrong = response(&id);
+        wrong["releases"][0]["media"][0]["discs"][0]["id"] = json!("wrong");
+        assert!(select_release(&wrong, &id, &toc()).is_none());
+        let mut partial = response(&id);
+        partial["releases"][0]["media"][0]["tracks"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        assert!(select_release(&partial, &id, &toc()).is_none());
+        assert!(select_release(&json!({"id":id,"releases":[]}), &id, &toc()).is_none());
+    }
+    #[test]
+    fn corrupt_cache_and_non_images_are_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("test.json"), b"broken").unwrap();
+        assert!(read_cache(dir.path(), "test").is_none());
+        assert!(CoverImage::parse(b"<html>unavailable</html>".to_vec()).is_none());
+    }
+}

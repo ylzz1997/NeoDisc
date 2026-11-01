@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NeoDisc",
+  "version": "0.1.0",
+  "identifier": "studio.lucent.cdplayer",
+  "build": {
+    "beforeDevCommand": "npm run prepare:encoder && npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run prepare:encoder && npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "NeoDisc · CD Player",
+        "width": 1320,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 720,
+        "decorations": false,
+        "backgroundColor": "#221e1a"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; connect-src ipc: http://ipc.localhost; font-src 'self' data:; media-src 'self' blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "externalBin": [
+      "encoders/ffmpeg"
+    ],
+    "resources": {
+      "encoders/runtime/": "encoders/"
+    },
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "category": "Music",
+    "shortDescription": "Modern CD player and audio ripper",
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  },
+  "mainBinaryName": "NeoDisc"
+}

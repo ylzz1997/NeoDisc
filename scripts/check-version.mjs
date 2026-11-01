@@ -1,0 +1,11 @@
+import {readFile} from 'node:fs/promises';
+const json=async file=>JSON.parse(await readFile(file,'utf8'));
+const pkg=await json('package.json');
+const lock=await json('package-lock.json');
+const tauri=await json('src-tauri/tauri.conf.json');
+const rustVersion=async file=>(await readFile(file,'utf8')).match(/name = "lucent-cd"\r?\nversion = "([^"]+)"/)?.[1];
+const versions=[pkg.version,lock.version,lock.packages[''].version,tauri.version,await rustVersion('src-tauri/Cargo.toml'),await rustVersion('src-tauri/Cargo.lock')];
+if(versions.some(value=>value!==pkg.version))throw new Error(`Version mismatch: ${JSON.stringify(versions)}`);
+const tag=process.env.NEODISC_RELEASE_TAG;
+if(tag&&tag!==`v${pkg.version}`)throw new Error(`Release tag ${tag} must match v${pkg.version}`);
+console.log(`All versions match ${pkg.version}${tag?` (${tag})`:''}`);

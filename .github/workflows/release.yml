@@ -1,0 +1,72 @@
+name: Publish release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/check-version.mjs
+        env:
+          NEODISC_RELEASE_TAG: ${{ github.ref_name }}
+
+  build:
+    needs: version
+    uses: ./.github/workflows/desktop.yml
+    with:
+      package: true
+
+  publish:
+    name: Publish EXE and DMGs
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: installers
+          merge-multiple: true
+      - name: Validate assets and publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          exe=(installers/*_x64-setup.exe)
+          arm=(installers/*_aarch64.dmg)
+          intel=(installers/*_x64.dmg)
+          [[ ${#exe[@]} == 1 && ${#arm[@]} == 1 && ${#intel[@]} == 1 ]]
+          (cd installers && sha256sum *.exe *.dmg > SHA256SUMS.txt)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" installers/* --clobber
+          else
+            extra=()
+            if [[ "$RELEASE_TAG" == *-* ]]; then extra+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" installers/* --verify-tag \
+              --title "NeoDisc $RELEASE_TAG" --notes-file .github/release-notes.md \
+              --generate-notes "${extra[@]}"
+          fi
