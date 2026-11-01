@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import { mkdir, readFile, writeFile, copyFile, chmod, rename, stat } from 'node:fs/promises';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,10 +34,14 @@ try {
 async function download(url,path,sha256) {
   try { if(await hash(path)===sha256)return; } catch {}
   console.log(`Downloading ${url}`);
-  const response=await fetch(url,{signal:AbortSignal.timeout(600000)});
-  if(!response.ok||!response.body)throw new Error(`Download failed: ${response.status} ${url}`);
   const partial=`${path}.download`;
-  await pipeline(Readable.fromWeb(response.body),createWriteStream(partial));
+  // SourceForge redirects can trigger an undici parser assertion on macOS.
+  // Both supported operating systems provide curl; retain the pinned digest.
+  await run(process.platform==='win32'?'curl.exe':'curl',[
+    '--fail','--location','--show-error','--silent','--retry','3',
+    '--retry-all-errors','--connect-timeout','30','--max-time','600',
+    '--output',partial,url,
+  ]);
   if(await hash(partial)!==sha256)throw new Error(`SHA-256 mismatch: ${url}`);
   await rename(partial,path);
 }
