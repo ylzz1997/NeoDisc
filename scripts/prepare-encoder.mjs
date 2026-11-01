@@ -12,7 +12,7 @@ const target=process.env.NEODISC_ENCODER_TARGET || targetArgument || process.env
 if (!['x86_64-pc-windows-msvc','aarch64-apple-darwin','x86_64-apple-darwin'].includes(target)) throw new Error(`Unsupported encoder target: ${target}`);
 const windows=target.endsWith('windows-msvc');
 if (windows !== (process.platform==='win32')) throw new Error('Prepare the Windows encoder on Windows and the macOS encoder on macOS.');
-const revision=windows?'BtbN-n9.0.2-39-g7adfbe40dc-20261031':'FFmpeg-n9.0.2-LAME-4.0-minimal-1';
+const revision=windows?'BtbN-n9.0.2-39-g7adfbe40dc-20261031':'FFmpeg-n9.0.2-LAME-4.0-minimal-2';
 const encoderDir=join(root,'src-tauri/encoders');
 const runtime=join(encoderDir,'runtime');
 const binary=join(encoderDir,`ffmpeg-${target}${windows?'.exe':''}`);

@@ -31,7 +31,7 @@ cd "$build_root/FFmpeg-n9.0.2"
   --disable-everything --enable-ffmpeg --disable-ffplay --enable-ffprobe --enable-avcodec --enable-avformat --enable-avfilter --enable-swresample \
   --enable-libmp3lame --enable-zlib --enable-encoder=libmp3lame,aac,pcm_s16le \
   --enable-decoder=pcm_s16le,mp3,mp3float,aac,mjpeg,png --enable-parser=mpegaudio,aac,mjpeg,png \
-  --enable-demuxer=s16le,image2,mov,mp3,wav,aac --enable-muxer=mp3,ipod,wav,s16le,null \
+  --enable-demuxer=pcm_s16le,image2,mov,mp3,wav,aac --enable-muxer=mp3,ipod,wav,pcm_s16le,null \
   --enable-protocol=file,pipe --enable-filter=aresample,aformat,anull
 make -j "$jobs"
 cp ffmpeg "$encoder_output"
