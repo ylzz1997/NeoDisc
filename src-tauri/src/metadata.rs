@@ -1,5 +1,7 @@
 //! Optional automatic lookup. Exact Disc IDs only; failures never block the CD engine.
-use crate::models::{AlbumMetadata, Disc, DiscToc, MetadataTrack};
+use crate::models::{
+    AlbumMetadata, AlbumMetadataDetails, Disc, DiscToc, MetadataTrack, TrackMetadataDetails,
+};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,8 @@ impl DiscToc {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Cached {
+    #[serde(default)]
+    schema: u8,
     checked_at: u64,
     value: Option<AlbumMetadata>,
 }
@@ -130,17 +134,11 @@ impl MetadataService {
             } else {
                 DAY
             };
-            if now().saturating_sub(cached.checked_at) < ttl {
+            if cached.schema >= 2 && now().saturating_sub(cached.checked_at) < ttl {
                 return Ok(cached.value.clone());
             }
         }
-        if let Some(last) = state.last_request {
-            if let Some(delay) = Duration::from_millis(1100).checked_sub(last.elapsed()) {
-                thread::sleep(delay);
-            }
-        }
-        state.last_request = Some(Instant::now());
-        let result = fetch_metadata(&id, toc);
+        let result = fetch_metadata(&id, toc, &mut state.last_request);
         let fallback = cached.and_then(|c| c.value);
         // A transient failure may reuse old positive metadata, never writes a negative disk cache.
         let remembered = result
@@ -157,6 +155,7 @@ impl MetadataService {
         match result {
             Ok(value) => {
                 let record = Cached {
+                    schema: 2,
                     checked_at: now(),
                     value: value.clone(),
                 };
@@ -206,16 +205,41 @@ fn download(client: &Client, url: &str, limit: u64) -> Result<Option<Vec<u8>>, S
     }
     Ok(Some(bytes))
 }
-fn fetch_metadata(id: &str, toc: &DiscToc) -> Result<Option<AlbumMetadata>, String> {
+fn download_musicbrainz(
+    client: &Client,
+    url: &str,
+    last_request: &mut Option<Instant>,
+) -> Result<Option<Vec<u8>>, String> {
+    if let Some(last) = last_request {
+        if let Some(delay) = Duration::from_millis(1100).checked_sub(last.elapsed()) {
+            thread::sleep(delay);
+        }
+    }
+    *last_request = Some(Instant::now());
+    download(client, url, MAX_JSON)
+}
+fn fetch_metadata(
+    id: &str,
+    toc: &DiscToc,
+    last_request: &mut Option<Instant>,
+) -> Result<Option<AlbumMetadata>, String> {
     let client = client()?;
     let url = format!("https://musicbrainz.org/ws/2/discid/{id}?fmt=json&inc=recordings+artist-credits&cdstubs=no");
-    let Some(bytes) = download(&client, &url, MAX_JSON)? else {
+    let Some(bytes) = download_musicbrainz(&client, &url, last_request)? else {
         return Ok(None);
     };
     let json: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let Some(mut matched) = select_release(&json, id, toc) else {
         return Ok(None);
     };
+    // Enrich only the already matched release. Failure keeps the basic match intact.
+    // https://musicbrainz.org/doc/MusicBrainz_API#Relationships
+    let url = format!("https://musicbrainz.org/ws/2/release/{}?fmt=json&inc=recordings+artist-credits+labels+release-groups+genres+annotation+ratings+discids+media+recording-level-rels+work-rels+work-level-rels+artist-rels+url-rels", matched.release_id);
+    if let Ok(Some(bytes)) = download_musicbrainz(&client, &url, last_request) {
+        if let Ok(release) = serde_json::from_slice(&bytes) {
+            enrich_details(&mut matched, release, toc);
+        }
+    }
     // Album text remains useful when the cover archive is unavailable.
     let url = format!(
         "https://coverartarchive.org/release/{}/front-500",
@@ -227,6 +251,152 @@ fn fetch_metadata(id: &str, toc: &DiscToc) -> Result<Option<AlbumMetadata>, Stri
         .and_then(CoverImage::parse)
         .map(|c| c.data_url());
     Ok(Some(matched))
+}
+fn core_tracks_match(left: &[MetadataTrack], right: &[MetadataTrack]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(a, b)| a.number == b.number && a.title == b.title && a.artist == b.artist)
+}
+fn enrich_details(matched: &mut AlbumMetadata, release: Value, toc: &DiscToc) {
+    if release["id"].as_str() != Some(matched.release_id.as_str()) {
+        return;
+    }
+    let media_count = release["media"]
+        .as_array()
+        .and_then(|media| u16::try_from(media.len()).ok());
+    let root = serde_json::json!({"id": matched.disc_id, "releases": [release]});
+    if let Some(mut enriched) = select_release(&root, &matched.disc_id, toc) {
+        if matched.title == enriched.title
+            && matched.artist == enriched.artist
+            && core_tracks_match(&matched.tracks, &enriched.tracks)
+        {
+            // This full release lookup includes every medium; disc-ID lookups may not.
+            enriched.details.disc_total = media_count.filter(|count| {
+                *count > 0
+                    && enriched
+                        .details
+                        .disc_number
+                        .is_none_or(|number| number <= *count)
+            });
+            matched.details = enriched.details;
+            matched.tracks = enriched.tracks;
+        }
+    }
+}
+fn note(value: &Value) -> Option<String> {
+    let value = value.as_str()?.trim();
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
+    {
+        return None;
+    }
+    Some(value.chars().take(2000).collect())
+}
+fn joined(values: impl Iterator<Item = String>) -> Option<String> {
+    let mut unique = vec![];
+    for value in values.take(30) {
+        if !unique.contains(&value) {
+            unique.push(value);
+        }
+    }
+    if unique.is_empty() {
+        None
+    } else {
+        Some(unique.join(" / "))
+    }
+}
+fn genre(value: &Value) -> Option<String> {
+    let mut genres: Vec<_> = value
+        .as_array()?
+        .iter()
+        .filter(|g| g["count"].as_i64().unwrap_or(0) >= 0)
+        .collect();
+    genres.sort_by_key(|g| std::cmp::Reverse(g["count"].as_i64().unwrap_or(0)));
+    joined(genres.into_iter().take(8).filter_map(|g| text(&g["name"])))
+}
+fn album_details(release: &Value, medium: &Value) -> AlbumMetadataDetails {
+    let year = text(&release["date"]).and_then(|date| {
+        date.get(..4)
+            .filter(|year| year.bytes().all(|b| b.is_ascii_digit()) && *year != "0000")
+            .map(str::to_owned)
+    });
+    let positive_number = |value: &Value| {
+        value
+            .as_u64()
+            .and_then(|n| u16::try_from(n).ok())
+            .filter(|n| *n > 0)
+    };
+    AlbumMetadataDetails {
+        year,
+        genre: genre(&release["genres"]).or_else(|| genre(&release["release-group"]["genres"])),
+        disc_number: positive_number(&medium["position"]),
+        disc_total: positive_number(&release["medium-count"]),
+        label: joined(
+            release["label-info"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|label| text(&label["label"]["name"])),
+        ),
+        compilation: release["release-group"]["secondary-types"]
+            .as_array()
+            .map(|types| {
+                types
+                    .iter()
+                    .any(|kind| kind.as_str() == Some("Compilation"))
+            }),
+        url: release["relations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|relation| relation["type"].as_str() == Some("official homepage"))
+            .find_map(|relation| {
+                let url = relation["url"]["resource"].as_str()?;
+                let parsed = reqwest::Url::parse(url).ok()?;
+                (matches!(parsed.scheme(), "http" | "https")
+                    && parsed.host_str().is_some()
+                    && url.len() <= 2000)
+                    .then(|| url.to_owned())
+            }),
+        comment: note(&release["annotation"]),
+        // Audio CDs do not have an encoder tag. MusicBrainz does not expose a
+        // copyright tag here either; neither is inferred from a label or artist.
+        ..Default::default()
+    }
+}
+fn track_details(recording: &Value) -> TrackMetadataDetails {
+    let composers = recording["relations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|relation| relation["type"].as_str() == Some("performance"))
+        .flat_map(|relation| {
+            relation["work"]["relations"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
+        .filter(|relation| relation["type"].as_str() == Some("composer"))
+        .filter_map(|relation| {
+            text(&relation["target-credit"]).or_else(|| text(&relation["artist"]["name"]))
+        });
+    TrackMetadataDetails {
+        recording_id: recording["id"]
+            .as_str()
+            .filter(|id| uuid(id))
+            .map(str::to_owned),
+        rating: recording["rating"]["value"].as_f64().filter(|value| {
+            value.is_finite()
+                && (0.0..=5.0).contains(value)
+                && recording["rating"]["votes-count"].as_u64() != Some(0)
+        }),
+        composer: joined(composers),
+        comment: note(&recording["annotation"]),
+    }
 }
 fn text(value: &Value) -> Option<String> {
     let s = value.as_str()?.trim();
@@ -296,6 +466,7 @@ fn select_release(root: &Value, id: &str, toc: &DiscToc) -> Option<AlbumMetadata
                         artist: credit(&track["artist-credit"])
                             .or_else(|| credit(&track["recording"]["artist-credit"]))
                             .unwrap_or_else(|| artist.clone()),
+                        details: track_details(&track["recording"]),
                     })
                 })
                 .collect();
@@ -311,6 +482,7 @@ fn select_release(root: &Value, id: &str, toc: &DiscToc) -> Option<AlbumMetadata
                         artist: artist.clone(),
                         tracks,
                         cover: None,
+                        details: album_details(release, medium),
                     },
                 ));
             }
@@ -319,7 +491,9 @@ fn select_release(root: &Value, id: &str, toc: &DiscToc) -> Option<AlbumMetadata
     let first = &candidates.first()?.1;
     // Equivalent pressings are fine; contradictory album/track text is not an automatic match.
     if candidates.iter().any(|(_, c)| {
-        c.title != first.title || c.artist != first.artist || c.tracks != first.tracks
+        c.title != first.title
+            || c.artist != first.artist
+            || !core_tracks_match(&c.tracks, &first.tracks)
     }) {
         return None;
     }
@@ -462,5 +636,119 @@ mod tests {
         fs::write(dir.path().join("test.json"), b"broken").unwrap();
         assert!(read_cache(dir.path(), "test").is_none());
         assert!(CoverImage::parse(b"<html>unavailable</html>".to_vec()).is_none());
+    }
+
+    #[test]
+    fn release_details_preserve_source_values_and_do_not_invent_missing_tags() {
+        let id = toc().disc_id().unwrap();
+        let mut root = response(&id);
+        let release = &mut root["releases"][0];
+        release["date"] = json!("2006-04-02");
+        release["genres"] = json!([{"name":"jazz","count":4},{"name":"pop","count":1},{"name":"unwanted","count":-1}]);
+        release["label-info"] =
+            json!([{"label":{"name":"Studio Records"}},{"label":{"name":"Studio Records"}}]);
+        release["release-group"] = json!({"secondary-types":["Compilation"]});
+        release["annotation"] = json!("Album note\nSecond line");
+        release["relations"] = json!([{"type":"official homepage","url":{"resource":"javascript:alert(1)"}},{"type":"official homepage","url":{"resource":"https://example.com/album"}}]);
+        release["media"][0]["position"] = json!(2);
+        release["media"][0]["tracks"][0]["recording"] = json!({
+            "id":"11234567-1234-1234-1234-123456789abc", "rating":{"value":4.5,"votes-count":10}, "annotation":"Track note",
+            "relations":[{"type":"performance","work":{"relations":[
+                {"type":"composer","artist":{"name":"Original name"},"target-credit":"Credited composer"},
+                {"type":"composer","artist":{"name":"Credited composer"}},
+                {"type":"lyricist","artist":{"name":"Not the composer"}}
+            ]}}]
+        });
+        let matched = select_release(&root, &id, &toc()).unwrap();
+        assert_eq!(matched.details.year.as_deref(), Some("2006"));
+        assert_eq!(matched.details.genre.as_deref(), Some("jazz / pop"));
+        assert_eq!(matched.details.label.as_deref(), Some("Studio Records"));
+        assert_eq!(matched.details.disc_number, Some(2));
+        assert_eq!(matched.details.disc_total, None); // A filtered disc-ID response cannot establish the total.
+        assert_eq!(matched.details.compilation, Some(true));
+        assert_eq!(
+            matched.details.url.as_deref(),
+            Some("https://example.com/album")
+        );
+        assert_eq!(
+            matched.details.comment.as_deref(),
+            Some("Album note\nSecond line")
+        );
+        assert!(matched.details.copyright.is_none());
+        assert!(matched.details.encoded_by.is_none());
+        assert_eq!(
+            matched.tracks[0].details.composer.as_deref(),
+            Some("Credited composer")
+        );
+        assert_eq!(matched.tracks[0].details.rating, Some(4.5));
+        assert_eq!(
+            matched.tracks[0].details.comment.as_deref(),
+            Some("Track note")
+        );
+        assert!(matched.tracks[1].details.rating.is_none());
+    }
+
+    #[test]
+    fn enrichment_matches_release_and_medium_and_keeps_basic_metadata_on_failure() {
+        let id = toc().disc_id().unwrap();
+        let root = response(&id);
+        let mut matched = select_release(&root, &id, &toc()).unwrap();
+        let mut release = root["releases"][0].clone();
+        release["media"][0]["position"] = json!(2);
+        release["media"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, json!({"position":1,"tracks":[]}));
+        release["date"] = json!("1998");
+        enrich_details(&mut matched, release.clone(), &toc());
+        assert_eq!(matched.details.disc_number, Some(2));
+        assert_eq!(matched.details.disc_total, Some(2));
+        assert_eq!(matched.details.year.as_deref(), Some("1998"));
+        let before = serde_json::to_value(&matched).unwrap();
+        release["id"] = json!("21234567-1234-1234-1234-123456789abc");
+        enrich_details(&mut matched, release.clone(), &toc());
+        assert_eq!(serde_json::to_value(&matched).unwrap(), before);
+        release["id"] = root["releases"][0]["id"].clone();
+        release["media"][1]["tracks"][0]["title"] = json!("Conflicting track");
+        enrich_details(&mut matched, release, &toc());
+        enrich_details(&mut matched, json!({"error":"unavailable"}), &toc());
+        assert_eq!(serde_json::to_value(&matched).unwrap(), before);
+    }
+
+    #[test]
+    fn older_cached_metadata_stays_readable_and_ratings_are_not_guessed() {
+        let id = toc().disc_id().unwrap();
+        let album = select_release(&response(&id), &id, &toc()).unwrap();
+        let mut old = serde_json::to_value(album).unwrap();
+        old.as_object_mut().unwrap().remove("details");
+        for track in old["tracks"].as_array_mut().unwrap() {
+            track.as_object_mut().unwrap().remove("details");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(format!("{id}.json")),
+            serde_json::to_vec(&json!({"checked_at":now(),"value":old})).unwrap(),
+        )
+        .unwrap();
+        let cached = read_cache(dir.path(), &id).unwrap();
+        assert_eq!(cached.schema, 0); // Forces a refresh, while retaining this value for offline fallback.
+        assert!(cached.value.unwrap().tracks[0].details.composer.is_none());
+        for rating in [
+            json!({"value":5.1,"votes-count":1}),
+            json!({"value":-1,"votes-count":1}),
+            json!({"value":4,"votes-count":0}),
+            json!({"value":null}),
+        ] {
+            assert!(track_details(&json!({"rating":rating})).rating.is_none());
+        }
+        assert_eq!(
+            track_details(&json!({"rating":{"value":0,"votes-count":1}})).rating,
+            Some(0.0)
+        );
+        assert!(album_details(&json!({}), &json!({})).compilation.is_none());
+        assert_eq!(
+            album_details(&json!({"release-group":{"secondary-types":[]}}), &json!({})).compilation,
+            Some(false)
+        );
     }
 }

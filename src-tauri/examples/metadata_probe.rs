@@ -48,8 +48,16 @@ fn main() -> Result<(), String> {
         None => println!("NO MATCH: default names and artwork are retained"),
         Some(album) => {
             println!("{} / {} / {}", album.title, album.artist, album.release_id);
+            println!(
+                "Album details: {}",
+                serde_json::to_string(&album.details).unwrap()
+            );
             for track in album.tracks {
                 println!("{:02}: {} / {}", track.number, track.title, track.artist);
+                println!(
+                    "Track details: {}",
+                    serde_json::to_string(&track.details).unwrap()
+                );
             }
             println!("Cover available: {}", album.cover.is_some());
         }

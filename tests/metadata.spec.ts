@@ -9,7 +9,7 @@ const recognized: AlbumMetadata = {
 };
 declare global {
   interface Window {
-    __metadataTest: { complete: (drive: string, result: AlbumMetadata | null, fail?: boolean) => void; pending: string[]; rip: { disc: Disc } | null };
+    __metadataTest: { complete: (drive: string, result: AlbumMetadata | null, fail?: boolean) => void; pending: string[]; rip: { disc: Disc } | null; calls: string[] };
   }
 }
 async function desktop(page: Page) {
@@ -17,6 +17,7 @@ async function desktop(page: Page) {
     const pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason: string) => void }>();
     const fixture = {
       pending: [] as string[], rip: null as { disc: Disc } | null,
+      calls: [] as string[],
       complete: (drive: string, value: AlbumMetadata | null, fail = false) => {
         const job = pending.get(drive); if (!job) throw new Error('No lookup for ' + drive);
         if (fail) job.reject('Network unavailable'); else job.resolve(value);
@@ -29,6 +30,7 @@ async function desktop(page: Page) {
       __TAURI_INTERNALS__: {
         metadata: { currentWindow: { label: 'main' } }, transformCallback: () => 1,
         invoke: async (cmd: string, args: { driveId?: string; disc?: Disc; request?: { disc: Disc } }) => {
+          if (cmd !== 'playback_status') fixture.calls.push(cmd);
           switch (cmd) {
             case 'list_drives': return [{ id: 'E:', name: '光驱 E' }, { id: 'F:', name: '光驱 F' }];
             case 'read_disc': return { driveId: args.driveId, fingerprint: args.driveId, title: '未命名专辑', artist: '未知艺术家',
@@ -72,6 +74,91 @@ test('NeoDisc uses amber by default and identifies automatically without blockin
   expect(rip?.disc.metadataId).toBe(recognized.discId);
   expect(rip?.disc.tracks[1].artist).toBe('另一位歌手');
   expect(errors).toEqual([]);
+});
+
+const detailed: AlbumMetadata = {
+  ...recognized,
+  cover: null,
+  details: { year: '2006', genre: 'Jazz / Pop', discNumber: 2, discTotal: 3, label: 'Studio Records', copyright: null, encodedBy: null, url: 'https://example.com/album', compilation: true, comment: '专辑附注\n第二行' },
+  tracks: recognized.tracks.map((track, index) => ({ ...track, details: index === 0 ? { rating: 4.5, composer: '测试作曲家', comment: '曲目附注' } : { composer: '另一位作曲家' } })),
+};
+
+test('track details show unknown fields, update after automatic lookup and do not affect playback or selection', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 });
+  await desktop(page);
+  await page.getByRole('button', { name: '查看“曲目 01”的详情', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '曲目详情', exact: true });
+  const field = (name: string) => dialog.locator('.detail-field').filter({ has: page.getByText(name, { exact: true }) }).locator('dd');
+  await expect(field('年份')).toHaveText('未知');
+  await expect(field('等级')).toHaveText('未知');
+  await expect(field('合辑的一部分')).toHaveText('未知');
+  await expect(dialog.locator('.track-details-note')).toContainText('正在自动识别元信息');
+  await expect(dialog.getByRole('button', { name: '完成', exact: true })).toBeInViewport();
+  await page.evaluate(meta => window.__metadataTest.complete('E:', meta), detailed);
+  await expect(field('专辑艺术家')).toHaveText('测试音乐人');
+  await expect(field('年份')).toHaveText('2006');
+  await expect(field('光盘号')).toHaveText('2 / 3');
+  await expect(field('发行商')).toHaveText('Studio Records');
+  await expect(field('版权')).toHaveText('未知');
+  await expect(field('编码者')).toHaveText('未知');
+  await expect(field('URL')).toHaveText('https://example.com/album');
+  await expect(field('等级')).toContainText('4.5 / 5');
+  await expect(field('作曲家')).toHaveText('测试作曲家');
+  await expect(field('合辑的一部分')).toHaveText('是');
+  await expect(field('注释')).toHaveText('曲目附注');
+  await expect(field('采样率')).toHaveText('44.1 kHz'); // Output endpoint is 48 kHz in this fixture.
+  await expect(field('位深')).toHaveText('16-bit');
+  await expect(field('编号')).toHaveText('1 / 2');
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: 'artifacts/track-details-dark.png', animations: 'disabled' });
+  await dialog.getByRole('button', { name: '关闭曲目详情', exact: true }).press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '查看“初光”的详情', exact: true })).toBeFocused();
+  await expect(page.getByLabel('选择 初光', { exact: true })).toBeChecked();
+  await page.locator('.track-details-button').first().dispatchEvent('dblclick');
+  expect(await page.evaluate(() => window.__metadataTest.calls)).not.toContain('play_track');
+  await page.getByLabel('搜索当前 CD 的曲目', { exact: true }).fill('归途');
+  await page.getByRole('button', { name: '查看“归途”的详情', exact: true }).click();
+  await expect(field('编号')).toHaveText('2 / 2');
+  await expect(field('音轨艺术家')).toHaveText('另一位歌手');
+  await expect(field('注释')).toHaveText('专辑附注\n第二行');
+});
+
+test('English details retain music text, show zero ratings and false compilation, and keep local edits', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 });
+  await desktop(page);
+  const metadata = structuredClone(detailed);
+  metadata.details!.compilation = false;
+  metadata.tracks[0].details!.rating = 0;
+  metadata.tracks[0].details!.comment = '<script>not executable</script>\nA long note / '.repeat(20);
+  await page.evaluate(meta => window.__metadataTest.complete('E:', meta), metadata);
+  await page.getByRole('button', { name: '编辑信息', exact: true }).click();
+  await page.getByLabel('专辑名称', { exact: true }).fill('我的专辑 / My album');
+  await page.getByLabel('曲目 1 的名称', { exact: true }).fill('本地曲名 / Local title');
+  await page.getByRole('button', { name: '保存信息', exact: true }).click();
+  await page.getByRole('button', { name: '首选项', exact: true }).click();
+  await page.getByLabel('界面语言', { exact: true }).selectOption('en');
+  await page.getByRole('button', { name: 'Switch to light mode', exact: true }).click();
+  await page.getByRole('button', { name: 'My CD', exact: true }).click();
+  await page.getByRole('button', { name: 'View details for “本地曲名 / Local title”', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Track details', exact: true });
+  const field = (name: string) => dialog.locator('.detail-field').filter({ has: page.getByText(name, { exact: true }) }).locator('dd');
+  await expect(field('Album')).toHaveText('我的专辑 / My album');
+  await expect(field('Title')).toHaveText('本地曲名 / Local title');
+  await expect(field('Composer')).toHaveText('测试作曲家');
+  await expect(field('Rating')).toContainText('0.0 / 5');
+  await expect(field('Part of a compilation')).toHaveText('No');
+  await expect(field('Copyright')).toHaveText('Unknown');
+  await expect(field('Comment')).toContainText('<script>not executable</script>');
+  await expect(dialog.locator('script')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeInViewport();
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: 'artifacts/track-details-light-en.png', animations: 'disabled' });
+  await dialog.getByRole('button', { name: 'Close track details', exact: true }).focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('button', { name: 'Close track details', exact: true })).toBeFocused();
 });
 
 for (const fail of [false, true]) test(`no match or unavailable network stays silent (${fail ? 'offline' : 'not found'})`, async ({ page }) => {

@@ -55,6 +55,32 @@ pub struct MetadataTrack {
     pub number: u8,
     pub title: String,
     pub artist: String,
+    #[serde(default)]
+    pub details: TrackMetadataDetails,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackMetadataDetails {
+    pub recording_id: Option<String>,
+    pub rating: Option<f64>,
+    pub composer: Option<String>,
+    pub comment: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumMetadataDetails {
+    pub year: Option<String>,
+    pub genre: Option<String>,
+    pub disc_number: Option<u16>,
+    pub disc_total: Option<u16>,
+    pub label: Option<String>,
+    pub copyright: Option<String>,
+    pub encoded_by: Option<String>,
+    pub url: Option<String>,
+    pub compilation: Option<bool>,
+    pub comment: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,6 +92,8 @@ pub struct AlbumMetadata {
     pub artist: String,
     pub tracks: Vec<MetadataTrack>,
     pub cover: Option<String>,
+    #[serde(default)]
+    pub details: AlbumMetadataDetails,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

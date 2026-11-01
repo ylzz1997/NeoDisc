@@ -14,9 +14,9 @@ export function withManualMetadata(disc: Disc): Disc {
     tracks: disc.tracks.map(t => ({ ...t, title: saved.tracks.find(m => m.number === t.number)?.title || t.title })) };
 }
 export function withAutomaticMetadata(disc: Disc, metadata: AlbumMetadata): Disc {
-  return withManualMetadata({ ...disc, title: metadata.title, artist: metadata.artist, metadataId: metadata.discId,
+  return withManualMetadata({ ...disc, title: metadata.title, artist: metadata.artist, metadataId: metadata.discId, metadataReleaseId: metadata.releaseId, details: metadata.details,
     tracks: disc.tracks.map(t => {
       const found = metadata.tracks.find(m => m.number === t.number);
-      return found ? { ...t, title: found.title, artist: found.artist } : t;
+      return found ? { ...t, title: found.title, artist: found.artist, details: found.details } : t;
     }) });
 }
