@@ -6,7 +6,7 @@
 
 一个面向 Windows 和 macOS 的现代 CD 播放与抓轨软件，使用 Rust、Tauri 和 React 构建。
 
-当前版本：**0.1.0**。
+当前版本：**0.1.1**。
 
 ## 当前功能
 
@@ -26,6 +26,8 @@
 - 自带音频编码器，无需另装 FFmpeg。
 
 ## 使用
+
+Apple Silicon Mac 请下载 `*_aarch64.dmg`，Intel Mac 请下载 `*_x64.dmg`。macOS 安装包已包含完整的 ad-hoc 签名，但尚未进行 Developer ID 签名或 Apple 公证。首次打开如被系统拦截，请在尝试打开后前往「系统设置 → 隐私与安全性」，对 NeoDisc 选择「仍要打开」。0.1.1 已修复 0.1.0 的应用包签名不完整问题。
 
 1. 打开桌面版，连接光驱并放入音频 CD，必要时刷新光驱列表。macOS 下请先等待音频 CD 出现在 Finder 中。
 2. 点击「播放全部」或双击曲目试听，顶部搜索只筛选当前光盘的曲目。点击曲目右侧的详情图标，可查看元信息和音频参数。
@@ -74,6 +76,8 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 ```
 
 界面测试在 Windows 使用 Edge，其他平台使用 Playwright Chromium；macOS / Linux 请先执行 `npx playwright install chromium`。
+
+发布构建还会挂载每个 macOS DMG，检查完整应用签名、主程序与编码器架构、随包资源、MP3/AAC 编码与解码，以及应用启动。可在 macOS 上执行 `node scripts/verify-macos-package.mjs <dmg> <target>` 重复这些检查。
 
 自动检查覆盖主题、语言选择与持久化、音频输出、EQ 频率响应与实时切换、预设保存、专辑识别、记录清理、编码参数、标签、封面、解码及取消。Windows 播放与抓轨已使用真实 USB 光驱和音频 CD 验证；macOS 光驱行为仍待真机验证。
 

@@ -6,7 +6,7 @@
 
 A modern CD player and ripper for Windows and macOS, built with Rust, Tauri and React.
 
-Current version: **0.1.0**.
+Current version: **0.1.1**.
 
 ## Current features
 
@@ -26,6 +26,8 @@ Current version: **0.1.0**.
 - Bundled audio encoder; no separate FFmpeg installation is required.
 
 ## Usage
+
+On Apple Silicon Macs, download `*_aarch64.dmg`; Intel Macs use `*_x64.dmg`. macOS packages include a complete ad-hoc signature but are not Developer ID signed or notarized. If macOS blocks the first launch, use **System Settings → Privacy & Security → Open Anyway** for NeoDisc after trying to open it. Version 0.1.1 fixes the incomplete app-bundle signature in 0.1.0.
 
 1. Open the desktop app, connect a CD drive and insert an audio CD. Refresh the drive list if needed. On macOS, wait for the audio CD to appear in Finder first.
 2. Click **Play all** or double-click a track. Search filters the current disc's tracks. Use the details icon at the right of a track to inspect its metadata and audio properties.
@@ -74,6 +76,8 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 ```
 
 Browser tests use Edge on Windows and Playwright Chromium elsewhere. Install Chromium with `npx playwright install chromium` before running those tests on macOS or Linux.
+
+Release builds also mount each macOS DMG and check the complete app signature, both executable architectures, bundled resources, MP3/AAC encoding and decoding, and application startup. Run `node scripts/verify-macos-package.mjs <dmg> <target>` on macOS to repeat these checks.
 
 Automated checks cover themes, language selection and persistence, audio routing, EQ frequency response and live changes, preset persistence, metadata, history cleanup, encoding settings, tags, artwork, decoding and cancellation. Windows playback and ripping have also been tested with a physical USB CD drive. macOS optical-drive behavior still needs testing on physical hardware.
 

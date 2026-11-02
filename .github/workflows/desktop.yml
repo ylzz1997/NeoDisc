@@ -96,6 +96,10 @@ jobs:
       - name: Build installer
         if: ${{ inputs.package }}
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+      - name: Verify packaged macOS application
+        if: ${{ inputs.package && runner.os == 'macOS' }}
+        shell: bash
+        run: node scripts/verify-macos-package.mjs src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg ${{ matrix.target }}
       - name: Keep release installers
         if: ${{ inputs.package }}
         uses: actions/upload-artifact@v4

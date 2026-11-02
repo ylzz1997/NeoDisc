@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "NeoDisc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "studio.lucent.cdplayer",
   "build": {
     "beforeDevCommand": "npm run prepare:encoder && npm run dev",
@@ -43,7 +43,8 @@
     "category": "Music",
     "shortDescription": "Modern CD player and audio ripper",
     "macOS": {
-      "minimumSystemVersion": "12.0"
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
     }
   },
   "mainBinaryName": "NeoDisc"

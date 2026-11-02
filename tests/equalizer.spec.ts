@@ -51,7 +51,7 @@ test('seven presets, keyboard fine-tuning, bypass and reset persist across launc
   for (const [i, name] of names.entries()) {
     await card.getByRole('button', { name, exact: true }).click();
     await expect(card.locator('.eq-status')).toHaveText('播放 EQ 已启用');
-    expect(controls.applied.at(-1)).toEqual({ enabled: true, preampDb: eqPresets[i].preampDb, bands: eqPresets[i].bands });
+    await expect.poll(() => controls.applied.at(-1)).toEqual({ enabled: true, preampDb: eqPresets[i].preampDb, bands: eqPresets[i].bands });
   }
   await page.getByLabel('1000 Hz 频段', { exact: true }).press('ArrowUp');
   await expect(page.getByLabel('1000 Hz 频段', { exact: true })).toHaveAttribute('aria-valuenow', '-0.5');
@@ -63,8 +63,8 @@ test('seven presets, keyboard fine-tuning, bypass and reset persist across launc
   await expect(card.locator('.eq-current')).toHaveText('自定义');
   await page.getByRole('switch', { name: '启用均衡器' }).click();
   await expect(card.locator('.eq-status')).toHaveText('播放 EQ 已关闭');
-  expect(controls.applied.at(-1)?.bands[5]).toBe(-0.5);
-  expect(controls.applied.at(-1)?.enabled).toBe(false);
+  await expect.poll(() => controls.applied.at(-1)?.bands[5]).toBe(-0.5);
+  await expect.poll(() => controls.applied.at(-1)?.enabled).toBe(false);
   await page.getByRole('switch', { name: '启用均衡器' }).click();
   await expect(page.getByLabel('1000 Hz 频段', { exact: true })).toHaveAttribute('aria-valuenow', '-0.5');
   await card.getByRole('button', { name: '重置均衡器' }).click();
@@ -90,7 +90,7 @@ test('slow IPC coalesces newer edits without restarting transport, and failed up
   controls.release!();
   await expect(page.locator('.eq-status')).toHaveText('播放 EQ 已启用');
   expect(controls.maximumInflight).toBe(1);
-  expect(controls.applied.at(-1)?.bands[5]).toBe(2.5);
+  await expect.poll(() => controls.applied.at(-1)?.bands[5]).toBe(2.5);
   controls.failNext = true;
   await page.getByRole('button', { name: '低音增强', exact: true }).click();
   await expect(page.locator('.eq-error')).toContainText('EQ 频段增益必须在 -12 到 +12 dB 之间');
@@ -98,7 +98,7 @@ test('slow IPC coalesces newer edits without restarting transport, and failed up
   await page.getByRole('button', { name: '重试应用 EQ' }).click();
   await expect(page.locator('.eq-error')).toHaveCount(0);
   await expect(page.locator('.eq-status')).toHaveText('播放 EQ 已启用');
-  expect(controls.applied.at(-1)?.bands).toEqual(eqPresets[1].bands);
+  await expect.poll(() => controls.applied.at(-1)?.bands).toEqual(eqPresets[1].bands);
   expect(controls.calls.filter(command => command === 'player_action')).toHaveLength(1);
 });
 
@@ -169,6 +169,12 @@ test('named presets save, recall, update, rename and delete without mutating bui
   await page.getByRole('button', { name: '摇滚', exact: true }).click();
   await page.getByLabel('1000 Hz 频段', { exact: true }).press('ArrowUp');
   await page.getByLabel('前级增益', { exact: true }).press('ArrowLeft');
+  // The status can still show the preceding update before the throttled IPC
+  // runs. Capture the save baseline only once the final curve reaches native.
+  await expect.poll(() => controls.applied.at(-1)).toEqual({
+    enabled: true, preampDb: -6.5,
+    bands: eqPresets.find(preset => preset.id === 'rock')!.bands.map((gain, index) => index === 5 ? 1.5 : gain),
+  });
   await expect(page.locator('.eq-status')).toHaveText('播放 EQ 已启用');
   const savedCurve = controls.applied.at(-1)!;
   const beforeSave = controls.applied.length;
@@ -186,7 +192,7 @@ test('named presets save, recall, update, rename and delete without mutating bui
   await page.getByRole('button', { name: '爵士', exact: true }).click();
   await selector.selectOption(presetId);
   await expect(page.locator('.eq-status')).toHaveText('播放 EQ 已启用');
-  expect(controls.applied.at(-1)).toEqual(savedCurve);
+  await expect.poll(() => controls.applied.at(-1)).toEqual(savedCurve);
   await page.reload();
   await page.getByRole('button', { name: '首选项', exact: true }).click();
   await expect(selector).toHaveValue(presetId);
