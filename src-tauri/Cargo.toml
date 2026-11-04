@@ -28,6 +28,7 @@ base64 = "0.22"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "native-tls", "system-proxy"] }
 plist = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 
 [dev-dependencies]
 claxon = "0.4"

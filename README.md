@@ -16,7 +16,7 @@ Current version: **0.1.1**.
 - CD playback, pause, previous/next track, seeking, volume and repeat. Press Space to play or pause.
 - Selectable audio output, automatic switching with the system default, device refresh and reconnection.
 - Live 10-band playback EQ with a draggable frequency/gain curve in dB, preamp gain and seven presets (Flat, Bass boost, Vocal, Pop, Rock, Classical and Jazz). Save, recall, update, rename or delete your own presets, with undo for deletion. Settings are saved locally; EQ does not affect ripped files.
-- Automatic album, track and artwork identification through MusicBrainz and Cover Art Archive. Missing or ambiguous results quietly keep the original display. Album information can also be edited locally.
+- Automatic album and track identification through MusicBrainz with CUETools DB as a fallback, plus Cover Art Archive artwork. Only unambiguous exact matches are applied. Lookup status and retry are available on the CD page; automatic lookup can be disabled in Preferences. Album information can also be edited locally.
 - A details icon on each track opens album and track metadata, including year, genre, disc number, label, composer, rating and comments, plus the original CD audio properties. Unavailable fields are shown as unknown.
 - FLAC and WAV extraction preserving the original 44.1 kHz, 16-bit stereo audio.
 - MP3 and AAC-LC/M4A extraction with sample rate, bitrate and channel settings. MP3 also supports CBR, ABR, VBR and encoding precision. Each format remembers its settings and offers quality presets.
@@ -31,7 +31,7 @@ On Apple Silicon Macs, download `*_aarch64.dmg`; Intel Macs use `*_x64.dmg`. mac
 
 1. Open the desktop app, connect a CD drive and insert an audio CD. Refresh the drive list if needed. On macOS, wait for the audio CD to appear in Finder first.
 2. Click **Play all** or double-click a track. Search filters the current disc's tracks. Use the details icon at the right of a track to inspect its metadata and audio properties.
-3. Album information is identified automatically in the background. Use **Edit info** to change album and track text.
+3. Album information is identified automatically in the background. **Identify again** retries without stopping playback and bypasses cached misses. Use **Preferences → Identify CD information automatically** to enable or disable online lookup; the choice is remembered. Only the disc ID / track layout is sent, never audio. The databases may not contain every CD. Use **Edit info** to change album and track text.
 4. Select tracks, choose FLAC, WAV, MP3 or AAC and an output folder. For MP3 or AAC, open **Encoding settings** to adjust the parameters, then click **Start ripping**.
 5. Open **Rip history** to find completed exports. Missing folders are marked and can be cleaned up together; deletion can be undone.
 6. Use **Appearance** for skins and night mode, and **Preferences** for language, audio output and EQ. Choose an EQ preset to enable it, then drag curve points or use arrow keys to adjust each band. Double-click a point to reset it to 0 dB. Use **Save preset** to name your settings and recall them from **My presets**. If playback becomes silent after changing devices, try **Reconnect output**.

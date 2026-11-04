@@ -40,12 +40,24 @@ type Shared = Arc<Engine>;
 #[tauri::command]
 async fn identify_disc(
     disc: Disc,
+    refresh: Option<bool>,
     state: State<'_, Shared>,
 ) -> Result<Option<AlbumMetadata>, String> {
     let engine = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || engine.metadata.lookup(&disc))
-        .await
-        .map_err(|e| e.to_string())?
+    // Capture cancellation before queuing; the blocking pool may start later.
+    let generation = engine.metadata.generation();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine
+            .metadata
+            .lookup_at_generation(&disc, refresh.unwrap_or(false), generation)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn cancel_metadata_lookup(state: State<'_, Shared>) {
+    state.metadata.cancel();
 }
 
 #[tauri::command]
@@ -247,6 +259,7 @@ pub fn run() {
             list_drives,
             read_disc,
             identify_disc,
+            cancel_metadata_lookup,
             play_track,
             player_action,
             set_equalizer,

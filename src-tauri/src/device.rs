@@ -22,6 +22,10 @@ mod platform;
 #[cfg(target_os = "macos")]
 #[path = "device/macos.rs"]
 mod platform;
+#[cfg(not(target_os = "windows"))]
+use self::read_disc as read_disc_layout;
+#[cfg(target_os = "windows")]
+use platform::read_disc_layout;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub use platform::{drives, eject, open_track, read_disc};
 
@@ -49,7 +53,7 @@ pub fn eject(_: &str) -> Result<(), String> {
 }
 
 pub fn validated_disc(requested: &Disc) -> Result<Disc, String> {
-    let mut actual = read_disc(&requested.drive_id)?;
+    let mut actual = read_disc_layout(&requested.drive_id)?;
     if actual.fingerprint != requested.fingerprint {
         return Err("光盘已更换，请重新读取曲目。".into());
     }

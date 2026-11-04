@@ -14,6 +14,7 @@ interface Props {
   onVolume: (value: number) => void;
   onAppearance: () => void;
   onLanguage: (language:Language) => void;
+  onAutoMetadata: (enabled: boolean) => void;
   equalizerPending: boolean;
   equalizerError: string | null;
   onEqualizer: (settings: EqualizerSettings) => void;
@@ -21,13 +22,17 @@ interface Props {
   onEqualizerPresets: (presets: SavedEqualizer[]) => void;
 }
 
-export default function Preferences({ native, settings, output, changing, onSelect, onRefresh, onVolume, onAppearance, onLanguage, equalizerPending, equalizerError, onEqualizer, onRetryEqualizer, onEqualizerPresets }: Props) {
+export default function Preferences({ native, settings, output, changing, onSelect, onRefresh, onVolume, onAppearance, onLanguage, onAutoMetadata, equalizerPending, equalizerError, onEqualizer, onRetryEqualizer, onEqualizerPresets }: Props) {
   const devices = output?.devices || [];
   const selectedMissing = settings.outputDevice && !devices.some(d => d.name === settings.outputDevice);
   const ready = !!output?.activeDevice && !output.error;
   return <div className="preferences-page">
     <div className="page-heading"><div><div className="eyebrow">A LITTLE MORE IN TUNE.</div><h1>{tr("让声音，去对的地方")}<span className="accent">{tr("。")}</span></h1><p className="page-subtitle">{tr("首选项 · 音频输出与播放")}</p></div><Headphones className="heading-illustration" size={48}/></div>
     <section className="language-settings"><div><label htmlFor="interface-language">{tr('界面语言')}</label><p>{tr(settings.language==='system'?'自动使用系统语言；暂不支持的语言使用英文。':'语言设置即时生效，不改变专辑、曲名或文件路径。')}</p></div><select id="interface-language" aria-label={tr('界面语言')} value={settings.language} onChange={event=>onLanguage(event.target.value as Language)}><option value="system">{tr('跟随系统语言')}</option><option value="zh-CN">简体中文</option><option value="en">English</option></select></section>
+    <section className="metadata-settings" aria-labelledby="metadata-setting-title">
+      <div><h2 id="metadata-setting-title">{tr('自动识别 CD 信息')}</h2><p id="metadata-setting-description">{tr('插入光盘后，自动联网获取专辑、曲名与封面。使用 MusicBrainz 和 CUETools DB，只发送光盘轨道目录，不上传音频。')}</p><small>{tr('关闭后不再联网识别，已显示的信息和手动修改会保留。')}</small></div>
+      <button type="button" role="switch" aria-checked={settings.autoMetadata} aria-labelledby="metadata-setting-title" aria-describedby="metadata-setting-description" className={`toggle ${settings.autoMetadata?'on':''}`} onClick={()=>onAutoMetadata(!settings.autoMetadata)}><i/></button>
+    </section>
     <section className="audio-settings-card">
       <div className="audio-card-heading"><div className="panel-icon"><Volume2 size={22}/></div><div><h2>{tr("音频输出")}</h2><p>{tr("选择耳机、音箱，或跟随系统的选择。")}</p></div><span className={`audio-state-badge ${ready?'ready':''}`}>{changing?tr("正在连接…"):!native?tr("桌面版功能"):output?.error?tr("需要连接"):ready?tr("输出已就绪"):tr("正在检测…")}</span></div>
       <label className="audio-device-label" htmlFor="audio-device">{tr("输出设备")}</label>

@@ -351,5 +351,17 @@
   "显示当前光盘信息；未获取到的元信息标为未知。":"Showing current disc information. Unavailable metadata is marked as unknown.",
   "音频参数来自 CD 原始音轨，不代表当前输出设备或抓轨编码设置。":"Audio properties describe the original CD track, not the output device or rip encoding settings.",
   "只读详情":"Read-only details",
-  "完成":"Done"
+  "完成":"Done",
+  "自动识别 CD 信息":"Identify CD information automatically",
+  "插入光盘后，自动联网获取专辑、曲名与封面。使用 MusicBrainz 和 CUETools DB，只发送光盘轨道目录，不上传音频。":"Look up album information, track names and artwork online when a CD is inserted. Uses MusicBrainz and CUETools DB; sends only the disc layout, never audio.",
+  "关闭后不再联网识别，已显示的信息和手动修改会保留。":"Turning this off stops online identification and keeps information already displayed and your edits.",
+  "自动识别已关闭":"Automatic identification is off",
+  "自动识别已开启":"Automatic identification is on",
+  "正在联网识别 CD 信息…":"Looking up CD information…",
+  "已识别 · {source}":"Identified · {source}",
+  "未找到可靠匹配，保留当前光盘信息。":"No reliable match found. Current disc information is kept.",
+  "联网识别暂不可用，请稍后重试。":"Online identification is unavailable. Please try again later.",
+  "当前光盘缺少用于联网识别的轨道目录。":"This disc has no track layout available for online identification.",
+  "设置":"Settings",
+  "重新识别":"Identify again"
 }

@@ -1,4 +1,5 @@
-//! Optional automatic lookup. Exact Disc IDs only; failures never block the CD engine.
+//! Optional TOC-based lookup. Only unambiguous matches; failures never block the CD engine.
+mod ctdb;
 use crate::models::{
     AlbumMetadata, AlbumMetadataDetails, Disc, DiscToc, MetadataTrack, TrackMetadataDetails,
 };
@@ -12,7 +13,10 @@ use std::{
     fs,
     io::{Cursor, Read},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -20,6 +24,7 @@ use std::{
 const MAX_JSON: u64 = 2 * 1024 * 1024;
 const MAX_COVER: u64 = 2 * 1024 * 1024;
 const DAY: u64 = 86400;
+const CACHE_SCHEMA: u8 = 3;
 
 impl DiscToc {
     pub fn disc_id(&self) -> Option<String> {
@@ -71,6 +76,21 @@ struct State {
 pub struct MetadataService {
     cache: PathBuf,
     state: Mutex<State>,
+    generation: AtomicU64,
+}
+
+struct LookupControl<'a> {
+    generation: &'a AtomicU64,
+    started: u64,
+}
+impl LookupControl<'_> {
+    fn check(&self) -> Result<(), String> {
+        if self.generation.load(Ordering::SeqCst) != self.started {
+            Err("Metadata lookup cancelled".into())
+        } else {
+            Ok(())
+        }
+    }
 }
 fn cache_root() -> PathBuf {
     dirs::cache_dir()
@@ -83,6 +103,7 @@ impl Default for MetadataService {
         Self {
             cache: cache_root(),
             state: Mutex::new(State::default()),
+            generation: AtomicU64::new(0),
         }
     }
 }
@@ -104,7 +125,51 @@ fn read_cache(root: &Path, id: &str) -> Option<Cached> {
     Some(cached)
 }
 impl MetadataService {
+    pub fn cancel(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
     pub fn lookup(&self, disc: &Disc) -> Result<Option<AlbumMetadata>, String> {
+        self.lookup_with_refresh(disc, false)
+    }
+
+    pub fn lookup_with_refresh(
+        &self,
+        disc: &Disc,
+        refresh: bool,
+    ) -> Result<Option<AlbumMetadata>, String> {
+        self.lookup_at_generation(disc, refresh, self.generation())
+    }
+
+    pub(crate) fn lookup_at_generation(
+        &self,
+        disc: &Disc,
+        refresh: bool,
+        generation: u64,
+    ) -> Result<Option<AlbumMetadata>, String> {
+        self.lookup_using(disc, refresh, generation, fetch_metadata)
+    }
+
+    fn lookup_using(
+        &self,
+        disc: &Disc,
+        refresh: bool,
+        generation: u64,
+        fetch: impl FnOnce(
+            &str,
+            &DiscToc,
+            &mut Option<Instant>,
+            &LookupControl<'_>,
+        ) -> Result<Option<AlbumMetadata>, String>,
+    ) -> Result<Option<AlbumMetadata>, String> {
+        let control = LookupControl {
+            generation: &self.generation,
+            started: generation,
+        };
         let Some(toc) = &disc.lookup_toc else {
             return Ok(None);
         };
@@ -122,8 +187,9 @@ impl MetadataService {
         }
         // A separate lock from playback/ripping also coalesces overlapping refreshes.
         let mut state = self.state.lock().map_err(|e| e.to_string())?;
+        control.check()?;
         if let Some((time, value)) = state.recent.get(&id) {
-            if time.elapsed() < Duration::from_secs(300) {
+            if !refresh && time.elapsed() < Duration::from_secs(300) {
                 return Ok(value.clone());
             }
         }
@@ -134,11 +200,16 @@ impl MetadataService {
             } else {
                 DAY
             };
-            if cached.schema >= 2 && now().saturating_sub(cached.checked_at) < ttl {
+            if !refresh
+                && cached.schema == CACHE_SCHEMA
+                && now().saturating_sub(cached.checked_at) < ttl
+            {
                 return Ok(cached.value.clone());
             }
         }
-        let result = fetch_metadata(&id, toc, &mut state.last_request);
+        let result = fetch(&id, toc, &mut state.last_request, &control);
+        // Disabling lookup also cancels follow-up requests and cache writes.
+        control.check()?;
         let fallback = cached.and_then(|c| c.value);
         // A transient failure may reuse old positive metadata, never writes a negative disk cache.
         let remembered = result
@@ -149,13 +220,15 @@ impl MetadataService {
         if state.recent.len() >= 128 {
             state.recent.clear();
         }
-        state
-            .recent
-            .insert(id.clone(), (Instant::now(), remembered));
+        if result.is_ok() || remembered.is_some() {
+            state
+                .recent
+                .insert(id.clone(), (Instant::now(), remembered));
+        }
         match result {
             Ok(value) => {
                 let record = Cached {
-                    schema: 2,
+                    schema: CACHE_SCHEMA,
                     checked_at: now(),
                     value: value.clone(),
                 };
@@ -186,8 +259,15 @@ fn client() -> Result<Client, String> {
         .build()
         .map_err(|e| e.to_string())
 }
-fn download(client: &Client, url: &str, limit: u64) -> Result<Option<Vec<u8>>, String> {
+fn download(
+    client: &Client,
+    url: &str,
+    limit: u64,
+    control: &LookupControl<'_>,
+) -> Result<Option<Vec<u8>>, String> {
+    control.check()?;
     let response = client.get(url).send().map_err(|e| e.to_string())?;
+    control.check()?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -203,12 +283,14 @@ fn download(client: &Client, url: &str, limit: u64) -> Result<Option<Vec<u8>>, S
     if bytes.len() as u64 > limit {
         return Err("Metadata response too large".into());
     }
+    control.check()?;
     Ok(Some(bytes))
 }
 fn download_musicbrainz(
     client: &Client,
     url: &str,
     last_request: &mut Option<Instant>,
+    control: &LookupControl<'_>,
 ) -> Result<Option<Vec<u8>>, String> {
     if let Some(last) = last_request {
         if let Some(delay) = Duration::from_millis(1100).checked_sub(last.elapsed()) {
@@ -216,16 +298,45 @@ fn download_musicbrainz(
         }
     }
     *last_request = Some(Instant::now());
-    download(client, url, MAX_JSON)
+    download(client, url, MAX_JSON, control)
 }
 fn fetch_metadata(
     id: &str,
     toc: &DiscToc,
     last_request: &mut Option<Instant>,
+    control: &LookupControl<'_>,
 ) -> Result<Option<AlbumMetadata>, String> {
     let client = client()?;
+    let primary = fetch_musicbrainz(&client, id, toc, last_request, control);
+    control.check()?;
+    provider_fallback(primary, || ctdb::fetch(&client, id, toc, control))
+}
+
+// An unavailable primary must not hide a successful secondary. A failure at
+// either provider must not become a long-lived "not found" cache entry.
+fn provider_fallback(
+    primary: Result<Option<AlbumMetadata>, String>,
+    secondary: impl FnOnce() -> Result<Option<AlbumMetadata>, String>,
+) -> Result<Option<AlbumMetadata>, String> {
+    match primary {
+        Ok(Some(album)) => Ok(Some(album)),
+        primary => match secondary() {
+            Ok(Some(album)) => Ok(Some(album)),
+            Ok(None) => primary,
+            Err(error) => Err(error),
+        },
+    }
+}
+
+fn fetch_musicbrainz(
+    client: &Client,
+    id: &str,
+    toc: &DiscToc,
+    last_request: &mut Option<Instant>,
+    control: &LookupControl<'_>,
+) -> Result<Option<AlbumMetadata>, String> {
     let url = format!("https://musicbrainz.org/ws/2/discid/{id}?fmt=json&inc=recordings+artist-credits&cdstubs=no");
-    let Some(bytes) = download_musicbrainz(&client, &url, last_request)? else {
+    let Some(bytes) = download_musicbrainz(client, &url, last_request, control)? else {
         return Ok(None);
     };
     let json: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
@@ -235,7 +346,7 @@ fn fetch_metadata(
     // Enrich only the already matched release. Failure keeps the basic match intact.
     // https://musicbrainz.org/doc/MusicBrainz_API#Relationships
     let url = format!("https://musicbrainz.org/ws/2/release/{}?fmt=json&inc=recordings+artist-credits+labels+release-groups+genres+annotation+ratings+discids+media+recording-level-rels+work-rels+work-level-rels+artist-rels+url-rels", matched.release_id);
-    if let Ok(Some(bytes)) = download_musicbrainz(&client, &url, last_request) {
+    if let Ok(Some(bytes)) = download_musicbrainz(client, &url, last_request, control) {
         if let Ok(release) = serde_json::from_slice(&bytes) {
             enrich_details(&mut matched, release, toc);
         }
@@ -245,7 +356,7 @@ fn fetch_metadata(
         "https://coverartarchive.org/release/{}/front-500",
         matched.release_id
     );
-    matched.cover = download(&client, &url, MAX_COVER)
+    matched.cover = download(client, &url, MAX_COVER, control)
         .ok()
         .flatten()
         .and_then(CoverImage::parse)
@@ -478,6 +589,7 @@ fn select_release(root: &Value, id: &str, toc: &DiscToc) -> Option<AlbumMetadata
                     AlbumMetadata {
                         disc_id: id.into(),
                         release_id: release_id.into(),
+                        source: "MusicBrainz".into(),
                         title: title.clone(),
                         artist: artist.clone(),
                         tracks,
@@ -586,6 +698,150 @@ mod tests {
             lead_out: 95462,
             offsets: vec![150, 15363, 32314, 46592, 63414, 80489],
         }
+    }
+    fn disc() -> Disc {
+        let toc = toc();
+        Disc {
+            drive_id: "test".into(),
+            title: String::new(),
+            artist: String::new(),
+            tracks: toc
+                .offsets
+                .iter()
+                .enumerate()
+                .map(|(i, offset)| crate::models::Track {
+                    number: i as u8 + 1,
+                    title: String::new(),
+                    start_sector: offset - 150,
+                    sectors: toc.offsets.get(i + 1).copied().unwrap_or(toc.lead_out) - offset,
+                    pre_emphasis: false,
+                    source_path: None,
+                    artist: None,
+                })
+                .collect(),
+            fingerprint: "test".into(),
+            lookup_toc: Some(toc),
+            metadata_id: None,
+        }
+    }
+    fn service(path: &Path) -> MetadataService {
+        MetadataService {
+            cache: path.into(),
+            state: Mutex::new(State::default()),
+            generation: AtomicU64::new(0),
+        }
+    }
+    #[test]
+    fn fallback_survives_primary_outage_without_hiding_partial_failures() {
+        let id = toc().disc_id().unwrap();
+        let album = select_release(&response(&id), &id, &toc()).unwrap();
+        assert!(
+            provider_fallback(Err("offline".into()), || Ok(Some(album.clone())))
+                .unwrap()
+                .is_some()
+        );
+        assert!(provider_fallback(Ok(None), || Ok(Some(album.clone())))
+            .unwrap()
+            .is_some());
+        assert!(
+            provider_fallback(Ok(Some(album)), || panic!("unnecessary fallback"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(provider_fallback(Err("offline".into()), || Ok(None)).is_err());
+        assert!(provider_fallback(Ok(None), || Err("offline".into())).is_err());
+        assert!(provider_fallback(Ok(None), || Ok(None)).unwrap().is_none());
+    }
+    #[test]
+    fn new_sources_and_explicit_retry_bypass_negative_caches() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = service(dir.path());
+        let disc = disc();
+        let id = toc().disc_id().unwrap();
+        fs::write(
+            dir.path().join(format!("{id}.json")),
+            serde_json::to_vec(&Cached {
+                schema: 2,
+                checked_at: now(),
+                value: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        // The old MusicBrainz-only miss cannot prevent trying new providers.
+        service
+            .lookup_using(&disc, false, 0, |_, _, _, _| Ok(None))
+            .unwrap();
+        assert_eq!(read_cache(dir.path(), &id).unwrap().schema, CACHE_SCHEMA);
+        service
+            .lookup_using(&disc, false, 0, |_, _, _, _| {
+                panic!("negative cache should be fresh")
+            })
+            .unwrap();
+        let album = service
+            .lookup_using(&disc, true, 0, |id, toc, _, _| {
+                Ok(select_release(&response(id), id, toc))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(album.title, "测试专辑");
+        assert!(read_cache(dir.path(), &id).unwrap().value.is_some());
+    }
+    #[test]
+    fn outages_are_not_cached_as_misses_and_old_positive_cache_works_offline() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = service(dir.path());
+        let disc = disc();
+        let id = toc().disc_id().unwrap();
+        assert!(service
+            .lookup_using(&disc, false, 0, |_, _, _, _| Err("offline".into()))
+            .is_err());
+        assert!(service.state.lock().unwrap().recent.is_empty());
+        assert!(read_cache(dir.path(), &id).is_none());
+        let album = select_release(&response(&id), &id, &toc()).unwrap();
+        fs::write(
+            dir.path().join(format!("{id}.json")),
+            serde_json::to_vec(&Cached {
+                schema: 2,
+                checked_at: 0,
+                value: Some(album),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(service
+            .lookup_using(&disc, false, 0, |_, _, _, _| Err("offline".into()))
+            .unwrap()
+            .is_some());
+    }
+    #[test]
+    fn cancellation_prevents_followup_requests_and_cache_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = service(dir.path());
+        let result = service.lookup_using(&disc(), false, 0, |id, toc, _, control| {
+            service.cancel();
+            assert!(control.check().is_err());
+            // Even a result that arrived just as the user disabled lookup is ignored.
+            Ok(select_release(&response(id), id, toc))
+        });
+        assert!(result.is_err());
+        assert!(service.state.lock().unwrap().recent.is_empty());
+        assert!(read_cache(dir.path(), &toc().disc_id().unwrap()).is_none());
+    }
+    #[test]
+    fn a_queued_lookup_cannot_start_after_the_user_turns_it_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = service(dir.path());
+        let queued_generation = service.generation();
+        service.cancel();
+        assert!(service
+            .lookup_using(&disc(), false, queued_generation, |_, _, _, _| {
+                panic!("a cancelled queued request must not contact a server")
+            })
+            .is_err());
+        assert!(service
+            .lookup_using(&disc(), false, service.generation(), |_, _, _, _| Ok(None))
+            .is_ok());
     }
     #[test]
     fn official_disc_id_vector_and_invalid_tocs() {

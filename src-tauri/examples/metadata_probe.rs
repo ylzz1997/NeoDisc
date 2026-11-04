@@ -1,4 +1,4 @@
-//! Opt-in online metadata check; sends only a Disc ID, never audio samples.
+//! Opt-in online metadata check; sends a Disc ID / TOC, never audio samples.
 use lucent_core::{
     device,
     metadata::MetadataService,
@@ -44,9 +44,12 @@ fn main() -> Result<(), String> {
         "Disc ID: {:?}",
         disc.lookup_toc.as_ref().and_then(|t| t.disc_id())
     );
-    match MetadataService::default().lookup(&disc)? {
+    match MetadataService::default()
+        .lookup_with_refresh(&disc, std::env::args().any(|arg| arg == "--refresh"))?
+    {
         None => println!("NO MATCH: default names and artwork are retained"),
         Some(album) => {
+            println!("Source: {}", album.source);
             println!("{} / {} / {}", album.title, album.artist, album.release_id);
             println!(
                 "Album details: {}",

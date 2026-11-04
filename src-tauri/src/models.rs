@@ -88,12 +88,18 @@ pub struct AlbumMetadataDetails {
 pub struct AlbumMetadata {
     pub disc_id: String,
     pub release_id: String,
+    #[serde(default = "musicbrainz_source")]
+    pub source: String,
     pub title: String,
     pub artist: String,
     pub tracks: Vec<MetadataTrack>,
     pub cover: Option<String>,
     #[serde(default)]
     pub details: AlbumMetadataDetails,
+}
+
+fn musicbrainz_source() -> String {
+    "MusicBrainz".into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

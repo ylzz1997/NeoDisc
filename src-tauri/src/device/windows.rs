@@ -5,6 +5,12 @@ use std::{
     os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
 };
 
+#[path = "cd_text.rs"]
+mod cd_text;
+
+const IOCTL_CDROM_READ_TOC_EX: u32 = 0x24054;
+const CDROM_READ_TOC_EX_FORMAT_CDTEXT: u8 = 5;
+
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetLogicalDrives() -> u32;
@@ -128,8 +134,22 @@ pub fn parse_toc(data: &[u8]) -> Result<Vec<Track>, String> {
 
 pub fn read_disc(id: &str) -> Result<Disc, String> {
     let file = open(id)?;
+    let mut disc = read_layout(id, &file)?;
+    let mut data = vec![0; cd_text::BUFFER_SIZE];
+    let request = [CDROM_READ_TOC_EX_FORMAT_CDTEXT, 0, 0, 0];
+    if let Ok(size) = ioctl(&file, IOCTL_CDROM_READ_TOC_EX, &request, &mut data) {
+        cd_text::apply(&data[..size], &mut disc);
+    }
+    Ok(disc)
+}
+
+pub(super) fn read_disc_layout(id: &str) -> Result<Disc, String> {
+    read_layout(id, &open(id)?)
+}
+
+fn read_layout(id: &str, file: &File) -> Result<Disc, String> {
     let mut toc = [0u8; 804];
-    let size = ioctl(&file, 0x24000, &[], &mut toc).map_err(|e| format!("未能读取音频 CD：{e}"))?;
+    let size = ioctl(file, 0x24000, &[], &mut toc).map_err(|e| format!("未能读取音频 CD：{e}"))?;
     let tracks = parse_toc(&toc[..size])?;
     // Only build an exact lookup for all-audio TOCs; mixed-session layouts need
     // a separate lead-out calculation and must not be guessed from durations.

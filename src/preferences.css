@@ -1,5 +1,11 @@
 .preferences-page { max-width: 870px; margin: 0 auto; }
 .preferences-page .page-heading { margin-bottom: 25px; }
+.metadata-settings { display: flex; align-items: center; gap: 24px; padding: 19px 22px; margin-bottom: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.metadata-settings > div { flex: 1; min-width: 0; }
+.metadata-settings h2 { font-size: 14px; font-weight: 600; }
+.metadata-settings p { margin: 7px 0 5px; font-size: 11px; line-height: 1.8; color: var(--muted); }
+.metadata-settings small { font-size: 10px; color: var(--faint); line-height: 1.7; }
+.metadata-settings .toggle { flex-shrink: 0; }
 .audio-settings-card { padding: 25px 28px; border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(135deg, var(--surface), var(--bg)); }
 .audio-card-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
 .audio-card-heading h2 { font-size: 16px; font-weight: 600; }

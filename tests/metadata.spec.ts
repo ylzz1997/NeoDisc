@@ -9,15 +9,16 @@ const recognized: AlbumMetadata = {
 };
 declare global {
   interface Window {
-    __metadataTest: { complete: (drive: string, result: AlbumMetadata | null, fail?: boolean) => void; pending: string[]; rip: { disc: Disc } | null; calls: string[] };
+    __metadataTest: { complete: (drive: string, result: AlbumMetadata | null, fail?: boolean) => void; pending: string[]; rip: { disc: Disc } | null; calls: string[]; refreshes: boolean[] };
   }
 }
-async function desktop(page: Page) {
-  await page.addInitScript(() => {
+async function desktop(page: Page, autoMetadata = true) {
+  await page.addInitScript(autoMetadata => {
+    if (!autoMetadata && !localStorage.getItem('lucent.settings')) localStorage.setItem('lucent.settings', JSON.stringify({ autoMetadata: false }));
     const pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason: string) => void }>();
     const fixture = {
       pending: [] as string[], rip: null as { disc: Disc } | null,
-      calls: [] as string[],
+      calls: [] as string[], refreshes: [] as boolean[],
       complete: (drive: string, value: AlbumMetadata | null, fail = false) => {
         const job = pending.get(drive); if (!job) throw new Error('No lookup for ' + drive);
         if (fail) job.reject('Network unavailable'); else job.resolve(value);
@@ -29,7 +30,7 @@ async function desktop(page: Page) {
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         metadata: { currentWindow: { label: 'main' } }, transformCallback: () => 1,
-        invoke: async (cmd: string, args: { driveId?: string; disc?: Disc; request?: { disc: Disc } }) => {
+        invoke: async (cmd: string, args: { driveId?: string; disc?: Disc; request?: { disc: Disc }; refresh?: boolean }) => {
           if (cmd !== 'playback_status') fixture.calls.push(cmd);
           switch (cmd) {
             case 'list_drives': return [{ id: 'E:', name: '光驱 E' }, { id: 'F:', name: '光驱 F' }];
@@ -37,11 +38,12 @@ async function desktop(page: Page) {
               lookupToc: { firstTrack: 1, lastTrack: 2, leadOut: 20150, offsets: [150, 10150] },
               tracks: [1, 2].map(number => ({ number, title: `曲目 0${number}`, startSector: (number - 1) * 10000, sectors: 10000, preEmphasis: false })) };
             case 'identify_disc': return new Promise((resolve, reject) => {
+              fixture.refreshes.push(!!args.refresh);
               const drive = args.disc!.driveId; pending.set(drive, { resolve, reject }); fixture.pending.push(drive);
             });
             case 'default_output': return 'C:/Music/NeoDisc';
             case 'select_audio_output': return output;
-            case 'player_action': case 'set_equalizer': return null;
+            case 'player_action': case 'set_equalizer': case 'cancel_metadata_lookup': return null;
             case 'playback_status': return { track: null, playing: false, position: 0, duration: 0, volume: .5, error: null, ended: false, output };
             case 'start_rip': fixture.rip = args.request!; return 'C:/Music/NeoDisc/Test';
             case 'plugin:event|listen': return 1;
@@ -51,10 +53,64 @@ async function desktop(page: Page) {
         },
       },
     });
-  });
+  }, autoMetadata);
   await page.goto('/');
-  await expect.poll(() => page.evaluate(() => window.__metadataTest.pending)).toContain('E:');
+  if (autoMetadata) await expect.poll(() => page.evaluate(() => window.__metadataTest.pending)).toContain('E:');
+  else await expect(page.getByRole('heading', { name: '未命名专辑', exact: true })).toBeVisible();
 }
+
+test('retry identifies again without rereading the drive and bypasses the miss cache', async ({ page }) => {
+  await desktop(page);
+  await page.evaluate(() => window.__metadataTest.complete('E:', null));
+  await expect(page.getByRole('status')).toContainText('未找到可靠匹配');
+  await page.getByRole('button', { name: '重新识别', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__metadataTest.refreshes)).toEqual([false, true]);
+  await page.evaluate(result => window.__metadataTest.complete('E:', result), { ...recognized, source: 'CUETools DB · FreeDB' });
+  await expect(page.getByRole('heading', { name: '晨光之间', exact: true })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('CUETools DB · FreeDB');
+  expect(await page.evaluate(() => window.__metadataTest.calls.filter(call => call === 'read_disc').length)).toBe(1);
+});
+
+test('disabling lookup rejects late results and persists across refresh and restart', async ({ page }) => {
+  await desktop(page);
+  await page.getByRole('button', { name: '首选项', exact: true }).click();
+  const toggle = page.getByRole('switch', { name: '自动识别 CD 信息', exact: true });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await expect(toggle).not.toBeChecked();
+  await expect.poll(() => page.evaluate(() => window.__metadataTest.calls)).toContain('cancel_metadata_lookup');
+  await page.getByRole('button', { name: '我的 CD', exact: true }).click();
+  await page.evaluate(result => window.__metadataTest.complete('E:', result), recognized);
+  await expect(page.getByRole('heading', { name: '未命名专辑', exact: true })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('自动识别已关闭');
+  await page.getByRole('button', { name: '刷新光盘', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__metadataTest.calls.filter(call => call === 'read_disc').length)).toBe(2);
+  expect(await page.evaluate(() => window.__metadataTest.pending)).toEqual(['E:']);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '未命名专辑', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.__metadataTest.pending)).toEqual([]);
+  await page.getByRole('button', { name: '首选项', exact: true }).click();
+  await expect(toggle).not.toBeChecked();
+  await page.screenshot({ path: 'artifacts/metadata-settings-disabled.png' });
+});
+
+test('enabling lookup identifies the loaded disc and disabling keeps the result', async ({ page }) => {
+  await desktop(page, false);
+  expect(await page.evaluate(() => window.__metadataTest.pending)).toEqual([]);
+  await page.getByRole('button', { name: '首选项', exact: true }).click();
+  const toggle = page.getByRole('switch', { name: '自动识别 CD 信息', exact: true });
+  await toggle.click();
+  await expect.poll(() => page.evaluate(() => window.__metadataTest.pending)).toEqual(['E:']);
+  await page.evaluate(result => window.__metadataTest.complete('E:', result), recognized);
+  await page.getByRole('button', { name: '我的 CD', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '晨光之间', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '首选项', exact: true }).click();
+  await toggle.click();
+  await page.getByRole('button', { name: '我的 CD', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '晨光之间', exact: true })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('自动识别已关闭');
+  expect(await page.evaluate(() => window.__metadataTest.calls.filter(call => call === 'read_disc').length)).toBe(1);
+});
 
 test('NeoDisc uses amber by default and identifies automatically without blocking disc controls', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));

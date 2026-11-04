@@ -54,6 +54,10 @@ export default function App() {
   const driveScan=useRef(false);
   const [details,setDetails]=useState<{fingerprint:string;driveId:string;number:number}|null>(null);
   const [metadataPending,setMetadataPending]=useState(false);
+  const [metadataStatus,setMetadataStatus]=useState<'idle'|'matched'|'notFound'|'error'|'unsupported'>('idle');
+  const [metadataSource,setMetadataSource]=useState('');
+  const metadataRequests=useRef(0),metadataEnabled=useRef(settings.autoMetadata),metadataCancel=useRef(Promise.resolve());
+  metadataEnabled.current=settings.autoMetadata;
   const [selected,setSelected]=useState<number[]>(native?[]:previewDisc.tracks.map(t=>t.number));
   const [search,setSearch]=useState(''),[busy,setBusy]=useState(''),[deviceMessage,setDeviceMessage]=useState(tr("正在寻找光驱…"));
   const [playback,setPlayback]=useState<Playback>(emptyPlayback);
@@ -105,21 +109,42 @@ export default function App() {
     });
   }
 
+  async function identifyDisc(data:Disc,refresh=false) {
+    if(!native||!metadataEnabled.current)return;
+    if(!data.lookupToc){setMetadataStatus('unsupported');return;}
+    const generation=discLoad.current,request=++metadataRequests.current;
+    const active=()=>metadataEnabled.current&&request===metadataRequests.current&&generation===discLoad.current;
+    setMetadataPending(true);
+    try {
+      // Wait for an earlier disable to cancel its backend work before starting again.
+      await metadataCancel.current;
+      if(!active())return;
+      const meta=await invoke<AlbumMetadata|null>('identify_disc',{disc:data,refresh});
+      if(!active())return;
+      if(!meta){setMetadataStatus('notFound');return;}
+      setDisc(current=>current?.fingerprint===data.fingerprint&&current.driveId===data.driveId?withAutomaticMetadata(current,meta):current);
+      setArtwork({fingerprint:data.fingerprint,cover:meta.cover});
+      setMetadataSource(meta.source||'MusicBrainz');setMetadataStatus('matched');
+    }catch{if(active())setMetadataStatus('error');}
+    finally{if(active())setMetadataPending(false);}
+  }
+  function changeAutoMetadata(enabled:boolean) {
+    metadataEnabled.current=enabled;++metadataRequests.current;
+    setMetadataPending(false);setMetadataStatus('idle');patch({autoMetadata:enabled});
+    if(!enabled&&native)metadataCancel.current=invoke('cancel_metadata_lookup').then(()=>{},()=>{});
+    if(enabled&&discRef.current)void identifyDisc(discRef.current);
+  }
   async function loadDisc(id:string) {
     const generation=++discLoad.current;
-    setDetails(null);setMetadataPending(false);
+    ++metadataRequests.current;
+    setDetails(null);setMetadataPending(false);setMetadataStatus('idle');
     setArtwork(null);
     setBusy('read');setDeviceMessage(tr("正在读取光盘目录…"));
     try {const data=withManualMetadata(await invoke<Disc>('read_disc',{driveId:id}));
       if(generation!==discLoad.current)return;
       setDisc(data);setSelected(data.tracks.map(t=>t.number));setDeviceMessage(tr("{v0} 首曲目 · Audio CD",{v0:data.tracks.length}));setProgress(null);setPlayback(emptyPlayback);setSearch('');
       // Network lookup runs after the disc is usable and never holds playback/ripping busy.
-      setMetadataPending(true);
-      void invoke<AlbumMetadata|null>('identify_disc',{disc:data}).then(meta=>{
-        if(!meta||generation!==discLoad.current)return;
-        setDisc(current=>current?.fingerprint===data.fingerprint&&current.driveId===data.driveId?withAutomaticMetadata(current,meta):current);
-        setArtwork({fingerprint:data.fingerprint,cover:meta.cover});
-      }).catch(()=>{/* Missing/offline metadata intentionally leaves the default display. */}).finally(()=>{if(generation===discLoad.current)setMetadataPending(false);});
+      void identifyDisc(data);
     }catch(e){if(generation===discLoad.current){setDisc(null);setSelected([]);setPlayback(emptyPlayback);setDeviceMessage(String(e));}}finally{if(generation===discLoad.current)setBusy('');}
   }
   async function refresh(automatic=false) {
@@ -238,12 +263,17 @@ export default function App() {
 
       <main className="content">
         {!native&&<div className="preview-banner"><Monitor size={15}/>{tr("界面预览 · 示例曲目仅用于展示，播放和抓轨需要桌面版。")}</div>}
-        {page==='preferences'&&<Preferences native={native} onLanguage={language=>patch({language})} settings={settings} output={audioOutput} changing={audioBusy||!audioReady} onSelect={name=>void selectOutput(name)} onRefresh={reconnect=>void refreshOutput(reconnect)} onVolume={changeVolume} onAppearance={()=>setPage('appearance')} equalizerPending={equalizer.pending} equalizerError={equalizer.error} onEqualizer={value=>patch({equalizer:value})} onRetryEqualizer={equalizer.retry} onEqualizerPresets={equalizerPresets=>patch({equalizerPresets})}/>}
+        {page==='preferences'&&<Preferences native={native} onLanguage={language=>patch({language})} onAutoMetadata={changeAutoMetadata} settings={settings} output={audioOutput} changing={audioBusy||!audioReady} onSelect={name=>void selectOutput(name)} onRefresh={reconnect=>void refreshOutput(reconnect)} onVolume={changeVolume} onAppearance={()=>setPage('appearance')} equalizerPending={equalizer.pending} equalizerError={equalizer.error} onEqualizer={value=>patch({equalizer:value})} onRetryEqualizer={equalizer.retry} onEqualizerPresets={equalizerPresets=>patch({equalizerPresets})}/>}
         {page==='disc'&&<>
           <div className="page-heading"><div><div className="eyebrow">YOUR DISC. YOUR COLLECTION.</div><h1>{tr("让音乐，慢下来")}<span className="accent">{tr("。")}</span></h1></div><div className="drive-controls"><select aria-label={tr("选择光驱")} disabled={ripping||!!busy} value={driveId} onChange={e=>{setDriveId(e.target.value);void loadDisc(e.target.value);}}>{drives.length?drives.map(d=><option key={d.id} value={d.id}>{localizeMessage(d.name)}</option>):<option value="">{native?tr("等待光盘"):tr("演示光盘")}</option>}</select><IconButton label={tr("刷新光盘")} onClick={()=>void refresh()} disabled={ripping||!!busy}><RefreshCw size={17} className={busy==='read'||busy==='scan'?'spin':''}/></IconButton><IconButton label={tr("弹出光盘")} disabled={!native||!driveId||ripping||!!busy} onClick={()=>void guarded(async()=>{await invoke('eject_disc',{driveId});++discLoad.current;setArtwork(null);setDisc(null);setSelected([]);setPlayback(emptyPlayback);setDeviceMessage(tr("光盘已弹出，放入下一张 CD 后会自动检测。"));})}><Eject size={18}/></IconButton></div></div>
 
           <div className="disc-layout"><section className="collection">
             <div className="album-hero"><DiscArt spinning={playback.playing} cover={artwork?.fingerprint===disc?.fingerprint?artwork?.cover:null}/><div className="album-info"><div className="album-type"><span className="pill">AUDIO CD</span><span>{tr("一张唱片，一段时光")}</span></div><h2>{disc?.title||tr("下一张，听什么？")}</h2><p className="artist">{disc?.artist||tr("连接光驱，重新发现你的 CD 收藏")}</p><div className="album-meta"><span>{disc?tr("{v0} 首曲目",{v0:disc.tracks.length}):tr("等待光盘")}</span><i/>{disc?<span>{Math.floor(seconds/60)} {tr(" 分钟 ")}{Math.floor(seconds%60)} {tr(" 秒")}</span>:<span>Windows & macOS</span>}</div><div className="quality-tags"><span>{tr("无损音质")}</span><span>44.1 kHz</span><span>16 bit · Stereo</span></div><div className="album-actions"><button className="primary" disabled={playbackDisabled} onClick={()=>void play()}>{busy==='play'?<LoaderCircle size={17} className="spin"/>:<Play size={16} fill="currentColor"/>}{tr("播放全部")}</button><button className="secondary" disabled={!disc||ripping} onClick={()=>setEditing(structuredClone(disc))}><Pencil size={15}/>{tr("编辑信息")}</button></div></div></div>
+            {native&&disc&&<div className="metadata-status" role="status">
+              {metadataPending?<LoaderCircle size={13} className="spin"/>:<Info size={13}/>}
+              <span>{!settings.autoMetadata?tr('自动识别已关闭'):metadataPending?tr('正在联网识别 CD 信息…'):metadataStatus==='matched'?tr('已识别 · {source}',{source:metadataSource}):metadataStatus==='notFound'?tr('未找到可靠匹配，保留当前光盘信息。'):metadataStatus==='error'?tr('联网识别暂不可用，请稍后重试。'):metadataStatus==='unsupported'?tr('当前光盘缺少用于联网识别的轨道目录。'):tr('自动识别已开启')}</span>
+              {!settings.autoMetadata?<button type="button" onClick={()=>setPage('preferences')}>{tr('设置')}</button>:!metadataPending&&metadataStatus!=='unsupported'&&<button type="button" disabled={ripping||!!busy} onClick={()=>void identifyDisc(disc,true)}>{tr('重新识别')}</button>}
+            </div>}
             <div className="track-toolbar"><div className="track-tab">{tr("曲目列表 ")}<span>{disc?.tracks.length||0}</span></div><span className="track-selection">{selected.length?tr("已选 {v0} 首",{v0:selected.length}):tr("选择想要保存的音乐")}</span></div>
             {disc?<><div className="track-table"><div className="track-header"><input type="checkbox" aria-label={tr("选择全部曲目")} checked={allSelected} disabled={ripping} onChange={()=>setSelected(allSelected?[]:disc.tracks.map(t=>t.number))}/><span>#</span><span>{tr("音乐标题")}</span><span>{tr("音质")}</span><Clock3 size={14}/><Info className="track-details-column" size={14} aria-label={tr('曲目详情')}/></div>{visibleTracks.map(t=><div key={t.number} className={`track-row ${playback.track===t.number?'current':''}`} onDoubleClick={()=>void play(t.number)}><input type="checkbox" aria-label={tr("选择 {v0}",{v0:t.title})} checked={selected.includes(t.number)} disabled={ripping} onChange={()=>setSelected(s=>s.includes(t.number)?s.filter(n=>n!==t.number):[...s,t.number])}/><button className="track-number" aria-label={tr("播放 {v0}",{v0:t.title})} onClick={()=>void play(t.number)} disabled={playbackDisabled}>{playback.track===t.number&&playback.playing?<AudioLines size={17}/>:<><span>{String(t.number).padStart(2,'0')}</span><Play size={13} fill="currentColor"/></>}</button><div className="track-title"><span>{t.title}</span>{t.preEmphasis&&<small title={tr("原始音频带预加重；当前不应用去加重处理")}>{tr("预加重")}</small>}</div><span className="lossless-label">LOSSLESS</span><time>{duration(t.sectors/75)}</time><button type="button" className="icon-button track-details-button" title={tr('查看曲目详情')} aria-label={tr('查看“{title}”的详情',{title:t.title})} onClick={event=>{event.stopPropagation();setDetails({fingerprint:disc.fingerprint,driveId:disc.driveId,number:t.number});}} onDoubleClick={event=>event.stopPropagation()}><Info size={15}/></button></div>)}{visibleTracks.length===0&&<div className="empty-search">{tr("没有找到“")}{search}{tr("”，试试曲目编号。")}</div>}</div><div className="table-foot"><Disc3 size={14}/><span>{native?tr("直接聆听光盘中的原始音频"):tr("当前为示例专辑")}</span><span>{tr("双击曲目即可播放")}</span></div></>:<div className="empty-disc"><Disc3 size={44}/><h3>{busy?tr("正在读取你的唱片"):tr("好音乐，值得再听一次")}</h3><p>{localizeMessage(deviceMessage)}</p><button className="secondary" disabled={!!busy} onClick={()=>void refresh()}><RefreshCw size={16}/>{tr("重新扫描")}</button></div>}
           </section>
