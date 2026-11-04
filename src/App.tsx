@@ -51,6 +51,7 @@ export default function App() {
   const [disc,setDisc]=useState<Disc|null>(native?null:previewDisc);
   const [artwork,setArtwork]=useState<{fingerprint:string;cover:string|null}|null>(null);
   const discLoad=useRef(0);
+  const driveScan=useRef(false);
   const [details,setDetails]=useState<{fingerprint:string;driveId:string;number:number}|null>(null);
   const [metadataPending,setMetadataPending]=useState(false);
   const [selected,setSelected]=useState<number[]>(native?[]:previewDisc.tracks.map(t=>t.number));
@@ -121,11 +122,39 @@ export default function App() {
       }).catch(()=>{/* Missing/offline metadata intentionally leaves the default display. */}).finally(()=>{if(generation===discLoad.current)setMetadataPending(false);});
     }catch(e){if(generation===discLoad.current){setDisc(null);setSelected([]);setPlayback(emptyPlayback);setDeviceMessage(String(e));}}finally{if(generation===discLoad.current)setBusy('');}
   }
-  async function refresh() {
+  async function refresh(automatic=false) {
     if(!native){toast(tr("这是浏览器界面预览；请打开桌面版连接光驱。"));return;}
-    if(ripRef.current)return;setBusy('scan');
-    try{const list=await invoke<Drive[]>('list_drives');setDrives(list);const id=list.find(d=>d.id===driveId)?.id||list[0]?.id||'';setDriveId(id);if(id){await loadDisc(id);}else{++discLoad.current;setArtwork(null);setDisc(null);setSelected([]);setDeviceMessage(tr("未发现音频光驱。连接 USB 光驱并放入 CD 后，点击刷新。"));}}catch(e){setDeviceMessage(String(e));}finally{setBusy('');}
+    if(ripRef.current||driveScan.current||(automatic&&busy))return;
+    driveScan.current=true;
+    const generation=discLoad.current;
+    if(!automatic)setBusy('scan');
+    try{
+      const list=await invoke<Drive[]>('list_drives');
+      // A user may select/eject a disc while the background scan is in flight.
+      if(generation!==discLoad.current||ripRef.current)return;
+      setDrives(current=>JSON.stringify(current)===JSON.stringify(list)?current:list);
+      const id=list.find(d=>d.id===driveId)?.id||list[0]?.id||'';
+      setDriveId(id);
+      if(id){
+        // Listing drives must never interrupt playback, selection or metadata edits.
+        if(!automatic||discRef.current?.driveId!==id)await loadDisc(id);
+      }else if(!automatic||driveId||discRef.current){
+        ++discLoad.current;setArtwork(null);setDisc(null);setSelected([]);setDetails(null);setMetadataPending(false);setPlayback(emptyPlayback);
+        setDeviceMessage(tr("未发现已就绪的音频 CD。请连接光驱并放入 CD，应用会自动检测。"));
+        if(discRef.current)await invoke('player_action',{action:'stop'});
+      }
+    }catch(e){if(!automatic)setDeviceMessage(String(e));}
+    finally{driveScan.current=false;if(!automatic)setBusy('');}
   }
+  const discoverDrives=useRef(refresh);
+  discoverDrives.current=refresh;
+  useEffect(()=>{
+    if(!native)return;
+    const discover=()=>{void discoverDrives.current(true);};
+    const timer=setInterval(discover,2000);
+    window.addEventListener('focus',discover);
+    return()=>{clearInterval(timer);window.removeEventListener('focus',discover);};
+  },[]);
   useEffect(()=>{
     if(initialized.current)return;initialized.current=true;
     if(native){void refresh();void invoke<string>('default_output').then(path=>setSettings(s=>({...s,outputDir:s.outputDir||path}))).catch(e=>toast(String(e),true));void invoke('player_action',{action:'volume',value:settings.volume}).catch(e=>toast(String(e),true));void invoke<AudioOutput>('select_audio_output',{deviceName:settings.outputDevice}).then(setAudioOutput).catch(e=>toast(String(e),true)).finally(()=>setAudioReady(true));}
@@ -211,7 +240,7 @@ export default function App() {
         {!native&&<div className="preview-banner"><Monitor size={15}/>{tr("界面预览 · 示例曲目仅用于展示，播放和抓轨需要桌面版。")}</div>}
         {page==='preferences'&&<Preferences native={native} onLanguage={language=>patch({language})} settings={settings} output={audioOutput} changing={audioBusy||!audioReady} onSelect={name=>void selectOutput(name)} onRefresh={reconnect=>void refreshOutput(reconnect)} onVolume={changeVolume} onAppearance={()=>setPage('appearance')} equalizerPending={equalizer.pending} equalizerError={equalizer.error} onEqualizer={value=>patch({equalizer:value})} onRetryEqualizer={equalizer.retry} onEqualizerPresets={equalizerPresets=>patch({equalizerPresets})}/>}
         {page==='disc'&&<>
-          <div className="page-heading"><div><div className="eyebrow">YOUR DISC. YOUR COLLECTION.</div><h1>{tr("让音乐，慢下来")}<span className="accent">{tr("。")}</span></h1></div><div className="drive-controls"><select aria-label={tr("选择光驱")} disabled={ripping||!!busy} value={driveId} onChange={e=>{setDriveId(e.target.value);void loadDisc(e.target.value);}}>{drives.length?drives.map(d=><option key={d.id} value={d.id}>{localizeMessage(d.name)}</option>):<option value="">{native?tr("未发现光驱"):tr("演示光盘")}</option>}</select><IconButton label={tr("刷新光盘")} onClick={()=>void refresh()} disabled={ripping||!!busy}><RefreshCw size={17} className={busy==='read'||busy==='scan'?'spin':''}/></IconButton><IconButton label={tr("弹出光盘")} disabled={!native||!driveId||ripping||!!busy} onClick={()=>void guarded(async()=>{await invoke('eject_disc',{driveId});++discLoad.current;setArtwork(null);setDisc(null);setSelected([]);setPlayback(emptyPlayback);setDeviceMessage(tr("光盘已弹出，放入下一张 CD 后刷新。"));})}><Eject size={18}/></IconButton></div></div>
+          <div className="page-heading"><div><div className="eyebrow">YOUR DISC. YOUR COLLECTION.</div><h1>{tr("让音乐，慢下来")}<span className="accent">{tr("。")}</span></h1></div><div className="drive-controls"><select aria-label={tr("选择光驱")} disabled={ripping||!!busy} value={driveId} onChange={e=>{setDriveId(e.target.value);void loadDisc(e.target.value);}}>{drives.length?drives.map(d=><option key={d.id} value={d.id}>{localizeMessage(d.name)}</option>):<option value="">{native?tr("等待光盘"):tr("演示光盘")}</option>}</select><IconButton label={tr("刷新光盘")} onClick={()=>void refresh()} disabled={ripping||!!busy}><RefreshCw size={17} className={busy==='read'||busy==='scan'?'spin':''}/></IconButton><IconButton label={tr("弹出光盘")} disabled={!native||!driveId||ripping||!!busy} onClick={()=>void guarded(async()=>{await invoke('eject_disc',{driveId});++discLoad.current;setArtwork(null);setDisc(null);setSelected([]);setPlayback(emptyPlayback);setDeviceMessage(tr("光盘已弹出，放入下一张 CD 后会自动检测。"));})}><Eject size={18}/></IconButton></div></div>
 
           <div className="disc-layout"><section className="collection">
             <div className="album-hero"><DiscArt spinning={playback.playing} cover={artwork?.fingerprint===disc?.fingerprint?artwork?.cover:null}/><div className="album-info"><div className="album-type"><span className="pill">AUDIO CD</span><span>{tr("一张唱片，一段时光")}</span></div><h2>{disc?.title||tr("下一张，听什么？")}</h2><p className="artist">{disc?.artist||tr("连接光驱，重新发现你的 CD 收藏")}</p><div className="album-meta"><span>{disc?tr("{v0} 首曲目",{v0:disc.tracks.length}):tr("等待光盘")}</span><i/>{disc?<span>{Math.floor(seconds/60)} {tr(" 分钟 ")}{Math.floor(seconds%60)} {tr(" 秒")}</span>:<span>Windows & macOS</span>}</div><div className="quality-tags"><span>{tr("无损音质")}</span><span>44.1 kHz</span><span>16 bit · Stereo</span></div><div className="album-actions"><button className="primary" disabled={playbackDisabled} onClick={()=>void play()}>{busy==='play'?<LoaderCircle size={17} className="spin"/>:<Play size={16} fill="currentColor"/>}{tr("播放全部")}</button><button className="secondary" disabled={!disc||ripping} onClick={()=>setEditing(structuredClone(disc))}><Pencil size={15}/>{tr("编辑信息")}</button></div></div></div>

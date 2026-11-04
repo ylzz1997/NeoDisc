@@ -13,6 +13,8 @@
   "{v0} 首曲目 · Audio CD":"{v0} tracks · Audio CD",
   "这是浏览器界面预览；请打开桌面版连接光驱。":"This is a browser preview. Open the desktop app to connect a CD drive.",
   "未发现音频光驱。连接 USB 光驱并放入 CD 后，点击刷新。":"No audio CD drive found. Connect a USB drive, insert a CD, then refresh.",
+  "未发现已就绪的音频 CD。请连接光驱并放入 CD，应用会自动检测。":"No audio CD is ready. Connect a drive and insert a CD; it will be detected automatically.",
+  "光盘已弹出，放入下一张 CD 后会自动检测。":"Disc ejected. The next CD will be detected automatically.",
   "界面预览 · 未连接实体光驱":"Preview · No physical CD drive connected",
   "预览中不模拟播放；桌面版会读取真实 CD 音频。":"Playback requires the desktop app and a real audio CD.",
   "请在桌面版中播放实体 CD。":"Open the desktop app to play an audio CD.",
