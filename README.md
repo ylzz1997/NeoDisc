@@ -6,7 +6,7 @@
 
 A modern CD player and ripper for Windows and macOS, built with Rust, Tauri and React.
 
-Current version: **0.1.1**.
+Current version: **0.1.2**.
 
 ## Current features
 
@@ -14,6 +14,7 @@ Current version: **0.1.1**.
 - Three skins with light and dark variants, system appearance and scheduled night mode.
 - English and Simplified Chinese, following the system language by default. A manual language choice takes effect immediately and is saved locally.
 - CD playback, pause, previous/next track, seeking, volume and repeat. Press Space to play or pause.
+- Automatically detects inserted and removed audio CDs, retries discs that are still mounting and preserves track selections during background scans. Windows also reads album and track names from CD-TEXT when available.
 - Selectable audio output, automatic switching with the system default, device refresh and reconnection.
 - Live 10-band playback EQ with a draggable frequency/gain curve in dB, preamp gain and seven presets (Flat, Bass boost, Vocal, Pop, Rock, Classical and Jazz). Save, recall, update, rename or delete your own presets, with undo for deletion. Settings are saved locally; EQ does not affect ripped files.
 - Automatic album and track identification through MusicBrainz with CUETools DB as a fallback, plus Cover Art Archive artwork. Only unambiguous exact matches are applied. Lookup status and retry are available on the CD page; automatic lookup can be disabled in Preferences. Album information can also be edited locally.

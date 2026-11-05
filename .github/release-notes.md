@@ -6,11 +6,13 @@ NeoDisc — a modern CD player and ripper for Windows and macOS.
 | `*_aarch64.dmg` | macOS Apple Silicon |
 | `*_x64.dmg` | macOS Intel |
 
-## Fixed in 0.1.1
+## New in 0.1.2
 
-- Fixed the incomplete macOS app-bundle signature that caused downloaded Apple Silicon builds to fail signature validation. Both macOS packages now use a complete ad-hoc signature, including the bundled encoder and resources.
-- Release checks now mount the actual DMGs and verify signatures, executable architectures, resources, MP3/AAC encoding and decoding, and application startup before uploading installers.
-- Fixed a timing race in the EQ preset browser test by waiting for the final settings to reach the native boundary before capturing the save baseline.
+- Audio CDs inserted after startup are detected automatically. Discs that are still mounting are retried, removal clears the loaded disc, and background scans preserve track selections and pause during ripping.
+- Improved album and track identification with CUETools DB as a fallback to MusicBrainz. Only unambiguous exact matches are applied, and existing disc information is kept when no reliable match is found.
+- Added identification status and an **Identify again** action that bypasses cached misses without rereading the disc or interrupting playback.
+- Added a saved **Identify CD information automatically** preference. Turning it off cancels lookup and ignores late results while keeping displayed information and local edits.
+- Windows now reads available album and track information from CD-TEXT, while playback and ripping validate the disc layout without rereading CD-TEXT.
 
 ## Features
 

@@ -1,6 +1,6 @@
 [package]
 name = "lucent-cd"
-version = "0.1.1"
+version = "0.1.2"
 description = "A thoughtful home for your CDs"
 edition = "2021"
 default-run = "lucent-cd"
